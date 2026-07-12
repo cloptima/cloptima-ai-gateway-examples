@@ -1,0 +1,28 @@
+{
+  "name": "cloptima-ai-gateway-examples",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained Node examples for Cloptima's managed AI gateway: each script creates its own policy and virtual key, then exercises it.",
+  "scripts": {
+    "quickstart-openai": "node src/examples/quickstart-openai.mjs",
+    "quickstart-anthropic": "node src/examples/quickstart-anthropic.mjs",
+    "multi-model": "node src/examples/multi-model.mjs",
+    "rate-limit": "node src/examples/rate-limit.mjs",
+    "token-limit": "node src/examples/token-limit.mjs",
+    "budget-limit": "node src/examples/budget-limit.mjs",
+    "agentic-runaway": "node src/examples/agentic-runaway.mjs",
+    "pii-guardrail": "node src/examples/pii-guardrail.mjs",
+    "exact-semantic-cache": "node src/examples/exact-semantic-cache.mjs",
+    "provider-deny": "node src/examples/provider-deny.mjs",
+    "metadata-deny": "node src/examples/metadata-deny.mjs",
+    "byok": "node src/examples/byok.mjs",
+    "unit-economics-roi": "node src/examples/unit-economics-roi.mjs",
+    "contract-pricing": "node src/examples/contract-pricing.mjs"
+  },
+  "dependencies": {
+    "openai": "^4.68.0",
+    "@anthropic-ai/sdk": "^0.30.0",
+    "dotenv": "^16.4.5"
+  }
+}

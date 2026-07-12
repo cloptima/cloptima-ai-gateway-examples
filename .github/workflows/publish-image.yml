@@ -1,0 +1,31 @@
+name: Publish Docker image
+
+# Keeps the published image in sync with the repo automatically - a
+# manually-built-and-forgotten image would silently drift from source over
+# time, which is worse than not publishing one at all. Public GHCR storage
+# and bandwidth are free on any GitHub plan (no quota to watch), and this
+# needs no secrets beyond the repo's own built-in GITHUB_TOKEN.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build image
+        run: docker build -t "ghcr.io/${{ github.repository }}:latest" -t "ghcr.io/${{ github.repository }}:${{ github.sha }}" .
+
+      - name: Push image
+        run: docker push --all-tags "ghcr.io/${{ github.repository }}"
