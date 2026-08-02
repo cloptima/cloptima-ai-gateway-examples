@@ -1,0 +1,8 @@
+{
+  "name": "Cloptima AI Gateway Examples",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "postCreateCommand": "echo 'Ready. Export your key first: export CLOPTIMA_AI_ADMIN_KEY=clop_pat_... then cd node, python, or shell and run any example (see README.md in this repo).'"
+}
