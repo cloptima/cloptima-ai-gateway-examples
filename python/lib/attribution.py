@@ -13,6 +13,7 @@ def attribution_headers(
     business_transaction_id=None,
     business_transaction_unit_count=None,
     business_outcome_status=None,
+    business_outcome_success=None,
     business_value_cents=None,
 ):
     """Maps demo-friendly field names to the x-cloptima-* attribution headers
@@ -33,6 +34,7 @@ def attribution_headers(
         "x-cloptima-business-transaction-id": business_transaction_id,
         "x-cloptima-business-transaction-unit-count": business_transaction_unit_count,
         "x-cloptima-business-outcome-status": business_outcome_status,
+        "x-cloptima-business-outcome-success": business_outcome_success,
         "x-cloptima-business-value-cents": business_value_cents,
     }
     return {key: str(value) for key, value in fields.items() if value is not None}

@@ -15,6 +15,7 @@ export function attributionHeaders({
   businessTransactionId,
   businessTransactionUnitCount,
   businessOutcomeStatus,
+  businessOutcomeSuccess,
   businessValueCents,
 } = {}) {
   const fields = {
@@ -32,6 +33,7 @@ export function attributionHeaders({
     'x-cloptima-business-transaction-id': businessTransactionId,
     'x-cloptima-business-transaction-unit-count': businessTransactionUnitCount,
     'x-cloptima-business-outcome-status': businessOutcomeStatus,
+    'x-cloptima-business-outcome-success': businessOutcomeSuccess,
     'x-cloptima-business-value-cents': businessValueCents,
   };
 

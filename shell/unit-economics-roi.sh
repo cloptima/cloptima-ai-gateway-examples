@@ -92,6 +92,7 @@ for i in "${!SUPPORT_PROMPTS[@]}"; do
     "x-cloptima-team: Support Automation" "x-cloptima-app: $SUPPORT_APP_ID" "x-cloptima-environment: prod" \
     "x-cloptima-business-transaction-type: $COST_CENTER_TRANSACTION_TYPE" "x-cloptima-business-transaction-id: $SUFFIX-support-$i" \
     "x-cloptima-business-transaction-unit-count: 1" "x-cloptima-business-outcome-status: resolved" \
+    "x-cloptima-business-outcome-success: true" \
     "x-cloptima-business-value-cents: 750"
   if [ "$LAST_OUTCOME" = "allowed" ]; then SUPPORT_SUCCESS_COUNT=$((SUPPORT_SUCCESS_COUNT + 1)); fi
 done
@@ -130,6 +131,7 @@ for i in "${!UPSELL_PROMPTS[@]}"; do
     "x-cloptima-team: Checkout Upsell" "x-cloptima-app: $UPSELL_APP_ID" "x-cloptima-environment: prod" \
     "x-cloptima-business-transaction-type: $PROFIT_CENTER_TRANSACTION_TYPE" "x-cloptima-business-transaction-id: $SUFFIX-upsell-$i" \
     "x-cloptima-business-transaction-unit-count: 1" "x-cloptima-business-outcome-status: accepted" \
+    "x-cloptima-business-outcome-success: true" \
     "x-cloptima-business-value-cents: $value_cents"
   echo "  (\$$value if accepted)"
   if [ "$LAST_OUTCOME" = "allowed" ]; then
