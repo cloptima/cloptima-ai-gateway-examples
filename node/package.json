@@ -23,7 +23,7 @@
     "approval-workflow": "node src/examples/approval-workflow.mjs",
     "guardrail-detector-categories": "node src/examples/guardrail-detector-categories.mjs",
     "guardrail-cost-governance": "node src/examples/guardrail-cost-governance.mjs",
-    "intelligent-routing": "node src/examples/intelligent-routing.mjs",
+    "adaptive-routing": "node src/examples/adaptive-routing.mjs",
     "prompt-release-workflow": "node src/examples/prompt-release-workflow.mjs",
     "mcp-tool-governance": "node src/examples/mcp-tool-governance.mjs"
   },

@@ -5,10 +5,10 @@
 // the generic governance queue (LLMGatewayApproval, approvalType
 // 'semantic_cache_enforce') that must be reviewed before enforcement actually
 // activates - until then, effective behavior stays downgraded to 'suggest'.
-// This script creates the class approval and shows the auto-queued entry
-// pending; it does not review/approve it - that decision belongs to a second
-// privileged identity in the console's Audit tab, not to the requester's own
-// script. See ../../docs/CACHE_AND_POLICY.md.
+// This script creates the policy with applyImmediately: true, so - since the
+// ai:admin key already qualifies to review this itself - that entry is
+// approved and enforcement is live immediately, with no separate review step.
+// See ../../docs/CACHE_AND_POLICY.md.
 // Run standalone:
 //   node src/examples/semantic-cache-enforce.mjs
 import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
@@ -27,7 +27,7 @@ async function main() {
   const suffix = runSuffix();
   const appId = `semantic-cache-enforce-${suffix}`;
 
-  console.log('Creating policy with exact cache (enforce) and semantic cache (enforce)...');
+  console.log('Creating policy with exact cache (enforce) and semantic cache (enforce), applyImmediately: true...');
   const policy = await createPolicy({
     name: `semantic-cache-enforce-${suffix}`,
     mode: 'enforce', budgetMode: 'hard_fast',
@@ -35,6 +35,7 @@ async function main() {
     promptRetentionMode: 'full',
     exactCacheEnabled: true, exactCacheMode: 'enforce',
     semanticCacheEnabled: true, semanticCacheMode: 'enforce',
+    applyImmediately: true,
   });
   const key = await createVirtualKey({ name: `vk-semantic-cache-enforce-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
   await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
@@ -50,17 +51,16 @@ async function main() {
   console.log(`  class approval granted: ${JSON.stringify(classApprovalData.createLLMSemanticCacheClassApproval)}`);
 
   console.log('\nChecking the generic governance queue for the entry auto-queued by semanticCacheMode: \'enforce\'...');
-  const pending = await listLLMGatewayApprovals({ status: 'pending', limit: 50 });
-  const autoQueued = pending.find((a) => a.approvalType === 'semantic_cache_enforce' && a.targetId === policy.id);
-  if (autoQueued) {
-    console.log(`  pending: ${JSON.stringify(autoQueued)}`);
+  const applied = await listLLMGatewayApprovals({ status: 'applied', limit: 50 });
+  const autoApplied = applied.find((a) => a.approvalType === 'semantic_cache_enforce' && a.targetId === policy.id);
+  if (autoApplied) {
+    console.log(`  applied: ${JSON.stringify(autoApplied)}`);
     console.log(
-      '  This is the one step this script does NOT do: reviewing it requires a second privileged identity in the '
-      + `console's Audit tab (${CONSOLE.audit}). Until reviewed, semantic-cache enforcement stays downgraded to `
-      + "'suggest' - exact-cache enforcement above is unaffected, since it isn't gated by this queue.",
+      '  applyImmediately: true above meant this entry was approved and applied right away, instead of sitting '
+      + `pending for a second identity to review in the console's Audit tab (${CONSOLE.audit}).`,
     );
   } else {
-    console.log('  no matching pending entry found (it may already have been reviewed on a prior run of this example).');
+    console.log('  no matching applied entry found.');
   }
 
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
@@ -96,11 +96,10 @@ async function main() {
   }
 
   console.log(
-    '\nExpected: exact-cache hits show up immediately. Semantic-cache hits stay at \'suggest\' (logged but not '
-    + 'served from cache) until the auto-queued approval above is reviewed - re-run this example after approving it '
-    + 'in the console to see semantic-cache enforcement actually take effect.',
+    '\nExpected: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant '
+    + 'semantic-cache enforcement was live from the start, with no separate review step needed.',
   );
-  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - shows both the pending semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab (${CONSOLE.policies}) shows the policy's cache config.`);
+  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - shows the applied semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab (${CONSOLE.policies}) shows the policy's cache config.`);
   console.log(JSON.stringify({ exactResults, semanticResults }, null, 2));
 }
 

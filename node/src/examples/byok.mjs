@@ -30,13 +30,25 @@ async function main() {
   console.log(`Created credential ${credentialId} (${created.createLLMProviderCredential.displayName})`);
 
   console.log('Testing the credential against a model...');
-  const tested = await graphql(
-    `mutation TestCredential($id: ID!, $input: TestLLMProviderCredentialInput) {
-      testLLMProviderCredential(id: $id, input: $input) { id provider displayName }
-    }`,
-    { id: credentialId, input: { model: 'gpt-4o-mini' } },
-  );
-  console.log('Credential test result:', JSON.stringify(tested.testLLMProviderCredential, null, 2));
+  // testLLMProviderCredential is intentionally console-session-only (it's the
+  // console's "Test" button, triggering a real live provider call) and always
+  // returns FORBIDDEN over the ai:admin PAT key this repo uses - swallow that
+  // expected error instead of letting it abort the rest of the BYOK flow.
+  try {
+    const tested = await graphql(
+      `mutation TestCredential($id: ID!, $input: TestLLMProviderCredentialInput) {
+        testLLMProviderCredential(id: $id, input: $input) { credential { id provider displayName status validationError } testedModel }
+      }`,
+      { id: credentialId, input: { model: 'gpt-4o-mini' } },
+    );
+    console.log('Credential test result:', JSON.stringify(tested.testLLMProviderCredential, null, 2));
+  } catch (err) {
+    if (String(err.message).includes('console session')) {
+      console.log('(skipped: testLLMProviderCredential is console-only, not available to this PAT key - expected)');
+    } else {
+      throw err;
+    }
+  }
 
   console.log('Creating a policy allowing the BYOK provider/model and minting a key...');
   const policy = await createPolicy({

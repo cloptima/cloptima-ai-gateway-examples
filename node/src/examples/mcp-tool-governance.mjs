@@ -17,6 +17,10 @@
 // proving that rule holds independently of (and would still apply once) the
 // tool server is reviewed and made active.
 //
+// At the end, a second tool server is registered with applyImmediately: true
+// to show the alternative: since this key already qualifies to review this
+// itself, that one activates right away instead of starting 'disabled'.
+//
 // Uses raw fetch rather than the openai SDK for these two calls: the SDK's
 // APIError only surfaces the JSON body's top-level `error` string and drops
 // the sibling `reason`/`violations` fields the gateway actually returns,
@@ -134,6 +138,28 @@ async function main() {
     + 'reviewed and made active.',
   );
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${appId}" for both records and the pending tool-server-registration approval; Policies tab (${CONSOLE.policies}) shows the tool server registration and allowedToolServers config.`);
+
+  console.log('\nRegistering a second tool server, this time with applyImmediately: true...');
+  const { createLLMGatewayToolServer: toolServer2 } = await graphql(
+    `mutation CreateToolServer($input: LLMGatewayToolServerInput!) {
+      createLLMGatewayToolServer(input: $input) { id name status }
+    }`,
+    {
+      input: {
+        name: `example-mcp-server-immediate-${suffix}`,
+        serverType: 'mcp',
+        serverUrl: 'https://example.com/mcp',
+        status: 'active',
+        allowedToolNames: ['search', 'lookup'],
+        applyImmediately: true,
+      },
+    },
+  );
+  console.log(`  tool server ${toolServer2.id} - status: ${toolServer2.status}`);
+  console.log(
+    "Expected: status 'active' right away - applyImmediately: true meant this registration was approved and "
+    + 'activated in this same call, with no separate review step and no tool_server_disabled block.',
+  );
 }
 
 main().catch((err) => {

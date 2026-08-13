@@ -1,6 +1,6 @@
-// Intelligent routing (certification/candidate contract, deterministic
+// Adaptive routing (certification/candidate contract, deterministic
 // routing decision, canary cohorts) configures a certified set of candidate
-// models per cost/latency tier under policy.metadata.routing.intelligent, a
+// models per cost/latency tier under policy.metadata.routing.adaptive, a
 // JSON object passed as policy metadata the same way route/fallback/cache
 // controls are.
 //
@@ -14,7 +14,7 @@
 // same kind of human-review step this repo's examples don't script (see
 // approval-workflow.mjs), so canary/enforce aren't demonstrated here.
 // Run standalone:
-//   node src/examples/intelligent-routing.mjs
+//   node src/examples/adaptive-routing.mjs
 import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
@@ -29,17 +29,17 @@ const CANDIDATE_MODELS = {
 
 async function main() {
   const suffix = runSuffix();
-  const appId = `intelligent-routing-${suffix}`;
+  const appId = `adaptive-routing-${suffix}`;
 
-  console.log('Creating a policy with intelligent routing in observe mode across cheap/balanced/strong candidate tiers...');
+  console.log('Creating a policy with adaptive routing in observe mode across cheap/balanced/strong candidate tiers...');
   const policy = await createPolicy({
-    name: `intelligent-routing-${suffix}`,
+    name: `adaptive-routing-${suffix}`,
     mode: 'enforce', budgetMode: 'hard_fast',
     allowedProviders: ['vertex_ai'],
     allowedModels: [...CANDIDATE_MODELS.cheap, ...CANDIDATE_MODELS.balanced, ...CANDIDATE_MODELS.strong],
     metadata: {
       routing: {
-        intelligent: {
+        adaptive: {
           mode: 'observe',
           route_risk_ceiling: 'low',
           candidate_set_version: `v${suffix}`,
@@ -48,7 +48,7 @@ async function main() {
       },
     },
   });
-  const key = await createVirtualKey({ name: `vk-intelligent-routing-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
+  const key = await createVirtualKey({ name: `vk-adaptive-routing-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
   await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
   console.log(`Minted key ${key.id}, bound. Sending a few calls at the 'balanced' tier model...\n`);
 
@@ -66,15 +66,15 @@ async function main() {
   }
 
   console.log(
-    "\nExpected: all 3 calls are served exactly as requested (observe mode never changes actual routing) - the "
-    + 'router logs, per call, which candidate it would have picked under this certified tier set. That decision '
+    '\nExpected: all 3 calls are served exactly as requested (observe mode never changes actual routing) - the '
+    + "router logs, per call, which candidate it would have picked under this certified tier set. That decision "
     + "log isn't in this script's own output; it's a console-side evidence trail.",
   );
-  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - shows the logged routing-decision trail per call; Policies tab (${CONSOLE.policies}) shows the metadata.routing.intelligent config, including the candidate tiers above.`);
+  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - shows the logged routing-decision trail per call; Policies tab (${CONSOLE.policies}) shows the metadata.routing.adaptive config, including the candidate tiers above.`);
   console.log(JSON.stringify(results, null, 2));
 }
 
 main().catch((err) => {
-  console.error('intelligent-routing failed:', err);
+  console.error('adaptive-routing failed:', err);
   process.exitCode = 1;
 });

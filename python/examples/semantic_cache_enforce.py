@@ -5,10 +5,10 @@ AND setting 'enforce' on the policy itself auto-queues a separate entry in
 the generic governance queue (LLMGatewayApproval, approvalType
 'semantic_cache_enforce') that must be reviewed before enforcement actually
 activates - until then, effective behavior stays downgraded to 'suggest'.
-This script creates the class approval and shows the auto-queued entry
-pending; it does not review/approve it - that decision belongs to a second
-privileged identity in the console's Audit tab, not to the requester's own
-script. See ../docs/CACHE_AND_POLICY.md.
+This script creates the policy with applyImmediately: true, so - since the
+ai:admin key already qualifies to review this itself - that entry is
+approved and enforcement is live immediately, with no separate review step.
+See ../docs/CACHE_AND_POLICY.md.
 Run standalone from python/:
     python -m examples.semantic_cache_enforce
 """
@@ -32,7 +32,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"semantic-cache-enforce-{suffix}"
 
-    print("Creating policy with exact cache (enforce) and semantic cache (enforce)...")
+    print("Creating policy with exact cache (enforce) and semantic cache (enforce), applyImmediately: true...")
     policy = create_policy({
         "name": f"semantic-cache-enforce-{suffix}",
         "mode": "enforce", "budgetMode": "hard_fast",
@@ -40,6 +40,7 @@ def main():
         "promptRetentionMode": "full",
         "exactCacheEnabled": True, "exactCacheMode": "enforce",
         "semanticCacheEnabled": True, "semanticCacheMode": "enforce",
+        "applyImmediately": True,
     })
     key = create_virtual_key({"name": f"vk-semantic-cache-enforce-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
@@ -55,17 +56,16 @@ def main():
     print(f"  class approval granted: {json.dumps(class_approval_data['createLLMSemanticCacheClassApproval'])}")
 
     print("\nChecking the generic governance queue for the entry auto-queued by semanticCacheMode: 'enforce'...")
-    pending = list_llm_gateway_approvals(status="pending", limit=50)
-    auto_queued = next((a for a in pending if a["approvalType"] == "semantic_cache_enforce" and a["targetId"] == policy["id"]), None)
-    if auto_queued:
-        print(f"  pending: {json.dumps(auto_queued)}")
+    applied = list_llm_gateway_approvals(status="applied", limit=50)
+    auto_applied = next((a for a in applied if a["approvalType"] == "semantic_cache_enforce" and a["targetId"] == policy["id"]), None)
+    if auto_applied:
+        print(f"  applied: {json.dumps(auto_applied)}")
         print(
-            "  This is the one step this script does NOT do: reviewing it requires a second privileged identity in the "
-            f"console's Audit tab ({config.CONSOLE['audit']}). Until reviewed, semantic-cache enforcement stays downgraded to "
-            "'suggest' - exact-cache enforcement above is unaffected, since it isn't gated by this queue."
+            "  applyImmediately: true above meant this entry was approved and applied right away, instead of sitting "
+            f"pending for a second identity to review in the console's Audit tab ({config.CONSOLE['audit']})."
         )
     else:
-        print("  no matching pending entry found (it may already have been reviewed on a prior run of this example).")
+        print("  no matching applied entry found.")
 
     client = openai_style_client(key["accessToken"], config.BASE_URL)
 
@@ -98,11 +98,10 @@ def main():
         print(f"  [{result['outcome']}] semantic-cache-{i + 1}")
 
     print(
-        "\nExpected: exact-cache hits show up immediately. Semantic-cache hits stay at 'suggest' (logged but not "
-        "served from cache) until the auto-queued approval above is reviewed - re-run this example after approving it "
-        "in the console to see semantic-cache enforcement actually take effect."
+        "\nExpected: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant "
+        "semantic-cache enforcement was live from the start, with no separate review step needed."
     )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows both the pending semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab ({config.CONSOLE['policies']}) shows the policy's cache config.")
+    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows the applied semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab ({config.CONSOLE['policies']}) shows the policy's cache config.")
     print(json.dumps({"exactResults": exact_results, "semanticResults": semantic_results}, indent=2, default=str))
 
 

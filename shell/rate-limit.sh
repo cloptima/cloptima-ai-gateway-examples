@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Creates a policy with a realistic per-minute request rate cap, fires calls
 # fast enough to exceed it, and shows the 429 once the cap is hit.
+# Rate limits are evaluated per calendar minute (e.g. 10:00:00-10:00:59 UTC), not rolling 60s.
 # Run standalone: ./rate-limit.sh
 set -euo pipefail
 

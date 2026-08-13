@@ -1,19 +1,17 @@
 """Demonstrates the generic governance queue for a manually-requested change,
 distinct from semantic_cache_enforce.py's auto-queued entry. Requests a
 budget increase on an existing policy (approvalType 'budget_limit_change').
-Requesting a change needs only an owner-or-admin identity; deciding it
-(approving or rejecting) requires the stricter 'owner' role the approval
-type's registry entry specifies - so an ai:admin key can request this one,
-but reviewing it is a separate, more privileged step. requestedChange uses
-the snake_case keys daily_budget_usd / monthly_budget_usd, not
-dailyBudgetUsd. It then lists the request pending alongside the
-approval-type registry itself. The actual approve/reject decision is
-deliberately NOT scripted here - reviewLLMGatewayApproval is a real,
-callable mutation, but who gets to exercise it is exactly the governance
-boundary this queue exists to enforce, so this example stops at "request it,
-show it's pending" and leaves the decision to a second privileged identity
-in the console's Audit tab, same as any real governance workflow would
-require.
+Both requesting and deciding a change need an admin-or-owner identity, so an
+ai:admin key can do either. requestedChange uses the snake_case keys
+daily_budget_usd / monthly_budget_usd, not dailyBudgetUsd. It then lists the
+request pending alongside the approval-type registry itself. The actual
+approve/reject decision is deliberately NOT scripted here for the first
+request - reviewLLMGatewayApproval is a real, callable mutation, but this
+example stops at "request it, show it's pending" and leaves the decision to
+a second identity in the console's Audit tab, same as any real governance
+workflow would require. A second request at the end passes
+applyImmediately: true, which - since this key already qualifies to decide
+this itself - skips that separate step and applies right away.
 Run standalone from python/:
     python -m examples.approval_workflow
 """
@@ -63,7 +61,6 @@ def main():
     print(f"  [{baseline['outcome']}] baseline-probe")
 
     print(f"\nRequesting approval to raise dailyBudgetUsd from ${CURRENT_DAILY_BUDGET_USD} to ${REQUESTED_DAILY_BUDGET_USD}...")
-    print("  Note: approvalType 'budget_limit_change' requires an 'owner'-role identity to REVIEW/decide - requesting it just needs owner-or-admin, so this ai:admin key can request it fine.")
     approval = create_llm_gateway_approval({
         "approvalType": "budget_limit_change",
         "targetId": policy["id"],
@@ -88,10 +85,30 @@ def main():
 
     print(
         f"\nExpected: the request sits in 'pending' status and the policy's dailyBudgetUsd stays at "
-        f"${CURRENT_DAILY_BUDGET_USD} until a second, owner-role identity reviews and approves it via "
+        f"${CURRENT_DAILY_BUDGET_USD} until a second identity reviews and approves it via "
         "reviewLLMGatewayApproval - not something this script does on its own behalf."
     )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows the pending budget_limit_change request awaiting review; Policies tab ({config.CONSOLE['policies']}) shows the policy's current, unchanged budget.")
+
+    requested_daily_budget_usd_2 = REQUESTED_DAILY_BUDGET_USD + 10
+    print("\nRequesting the same kind of budget increase again, this time with applyImmediately: true...")
+    immediate_approval = create_llm_gateway_approval({
+        "approvalType": "budget_limit_change",
+        "targetId": policy["id"],
+        "requestedChange": {"daily_budget_usd": requested_daily_budget_usd_2},
+        "affectedApps": [app_id],
+        "affectedRoutes": ["/v1/ai/chat/completions"],
+        "expectedCostImpactCents": (requested_daily_budget_usd_2 - CURRENT_DAILY_BUDGET_USD) * 100,
+        "expectedRiskReduction": "none - this is a budget increase, not a risk-reducing change",
+        "metadata": {"requestedBy": "approval-workflow example", "runSuffix": suffix},
+        "applyImmediately": True,
+    })
+    print(f"  result: {json.dumps(immediate_approval)}")
+
+    print(
+        "\nExpected: status is 'applied', not 'pending' - since this key already qualifies to decide this itself, "
+        "the request is approved and applied in this same call, with no separate review step."
+    )
+    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows the first request still pending and this second one already applied; Policies tab ({config.CONSOLE['policies']}) shows the policy's budget reflecting the applied change.")
 
 
 if __name__ == "__main__":

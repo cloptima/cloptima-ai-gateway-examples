@@ -16,6 +16,10 @@ additional tool_server_auto_approval_disabled entry the 'always' call
 doesn't get, proving that rule holds independently of (and would still apply
 once) the tool server is reviewed and made active.
 
+At the end, a second tool server is registered with applyImmediately: true
+to show the alternative: since this key already qualifies to review this
+itself, that one activates right away instead of starting 'disabled'.
+
 Uses raw requests rather than the openai SDK for these two calls: the SDK's
 APIStatusError only surfaces the JSON body, and this example needs to
 inspect the sibling `reason`/`violations` fields the gateway actually
@@ -137,6 +141,27 @@ def main():
         "reviewed and made active."
     )
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by app \"{app_id}\" for both records and the pending tool-server-registration approval; Policies tab ({config.CONSOLE['policies']}) shows the tool server registration and allowedToolServers config.")
+
+    print("\nRegistering a second tool server, this time with applyImmediately: true...")
+    tool_server_2_data = graphql(
+        """mutation CreateToolServer($input: LLMGatewayToolServerInput!) {
+          createLLMGatewayToolServer(input: $input) { id name status }
+        }""",
+        {"input": {
+            "name": f"example-mcp-server-immediate-{suffix}",
+            "serverType": "mcp",
+            "serverUrl": "https://example.com/mcp",
+            "status": "active",
+            "allowedToolNames": ["search", "lookup"],
+            "applyImmediately": True,
+        }},
+    )
+    tool_server_2 = tool_server_2_data["createLLMGatewayToolServer"]
+    print(f"  tool server {tool_server_2['id']} - status: {tool_server_2['status']}")
+    print(
+        "Expected: status 'active' right away - applyImmediately: true meant this registration was approved and "
+        "activated in this same call, with no separate review step and no tool_server_disabled block."
+    )
 
 
 if __name__ == "__main__":

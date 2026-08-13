@@ -34,17 +34,17 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `./byok.sh` | Bring your own provider credential and route it through Cloptima's governance layer (needs `PROVIDER_API_KEY` in `.env`). |
 | `./unit-economics-roi.sh` | A cost-center agent (ROI vs. a pre-LLM baseline) and a profit-center agent (real booked revenue) side by side, each with its own computed report. |
 | `./contract-pricing.sh` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost. |
-| `./semantic-cache-enforce.sh` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus the auto-queued governance-queue entry gating enforcement. |
-| `./approval-workflow.sh` | Request a manual policy-change approval (budget increase) and show it sitting pending in the generic governance queue. |
+| `./semantic-cache-enforce.sh` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
+| `./approval-workflow.sh` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
 | `./guardrail-detector-categories.sh` | Baseline guardrail categories (prompt injection, jailbreak, toxicity) plus the Enterprise-gated custom detector + third-party provider integration. |
 | `./guardrail-cost-governance.sh` | A per-request guardrail cost cap tripping the cost-exceeded downgrade-to-lightweight action. |
-| `./intelligent-routing.sh` | Intelligent routing in observe mode across cheap/balanced/strong candidate model tiers. |
-| `./prompt-release-workflow.sh` | Prompt template, version, eval run, and release approval - then a blocked production activation pending that approval. |
+| `./adaptive-routing.sh` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
+| `./prompt-release-workflow.sh` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
 | `./mcp-tool-governance.sh` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
 
 Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - edit the constants near the top of any script and re-run it.
 
-`rate-limit.sh` in particular is timing-sensitive: the cap is enforced per fixed clock-minute, and `curl`'s per-call subprocess overhead means a run can occasionally straddle a minute boundary and get a fresh quota partway through, letting more than the cap's worth of calls through across the two windows. If a run doesn't trip the cap, just re-run it - it reliably trips when the calls land within a single clock-minute.
+`rate-limit.sh` in particular is timing-sensitive: limits are evaluated per fixed calendar minute (e.g., 10:00:00 to 10:00:59 UTC) rather than a rolling window. Because `curl` subprocess overhead takes time, a run can cross a minute boundary and receive a fresh quota partway through. If it doesn't trip, simply re-run it.
 
 ## How the gateway calls work
 

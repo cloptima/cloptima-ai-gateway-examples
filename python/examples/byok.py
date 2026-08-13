@@ -39,13 +39,23 @@ def main():
     print(f"Created credential {credential_id} ({created['createLLMProviderCredential']['displayName']})")
 
     print("Testing the credential against a model...")
-    tested = graphql(
-        """mutation TestCredential($id: ID!, $input: TestLLMProviderCredentialInput) {
-          testLLMProviderCredential(id: $id, input: $input) { id provider displayName }
-        }""",
-        {"id": credential_id, "input": {"model": "gpt-4o-mini"}},
-    )
-    print("Credential test result:", json.dumps(tested["testLLMProviderCredential"], indent=2))
+    # testLLMProviderCredential is intentionally console-session-only (it's the
+    # console's "Test" button, triggering a real live provider call) and always
+    # returns FORBIDDEN over the ai:admin PAT key this repo uses - swallow that
+    # expected error instead of letting it abort the rest of the BYOK flow.
+    try:
+        tested = graphql(
+            """mutation TestCredential($id: ID!, $input: TestLLMProviderCredentialInput) {
+              testLLMProviderCredential(id: $id, input: $input) { credential { id provider displayName status validationError } testedModel }
+            }""",
+            {"id": credential_id, "input": {"model": "gpt-4o-mini"}},
+        )
+        print("Credential test result:", json.dumps(tested["testLLMProviderCredential"], indent=2))
+    except RuntimeError as err:
+        if "console session" in str(err):
+            print("(skipped: testLLMProviderCredential is console-only, not available to this PAT key - expected)")
+        else:
+            raise
 
     print("Creating a policy allowing the BYOK provider/model and minting a key...")
     policy = create_policy({

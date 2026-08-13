@@ -6,6 +6,19 @@ Self-contained examples for integrating with Cloptima's managed AI gateway: virt
 
 Don't want to run anything locally? See [`docs/RUNNING_SAFELY.md`](docs/RUNNING_SAFELY.md) for every way to run these - your own agent's sandbox, a Docker container, GitHub Codespaces, or the console with no code at all.
 
+## Enterprise Platform Capabilities
+
+While this repository focuses on client-side developer integration examples and proxy behaviors, the Cloptima platform natively supports production-grade enterprise requirements for AI governance and managed gateways:
+
+* **Hybrid & VPC Edge Deployment**: Deploy the Cloptima Edge Gateway directly within your own VPC or on-premises environment to keep inference traffic inside your security boundary.
+* **Offline Resilience & Local Enforcement**: The edge runtime syncs signed policy snapshots to a high-performance local store to evaluate budgets, rate limits, and security guardrails with sub-millisecond overhead, continuing to enforce policies offline even during cloud disconnections.
+* **High Availability & Failover**: Multi-instance edge deployments support robust high-availability configurations to ensure continuous service, sub-minute failovers, and high-throughput reliability.
+* **Unified Multi-Provider Catalog**: Supports token attribution, proxying, and policy enforcement across all major LLM providers (including Vertex AI, OpenAI, Anthropic, and custom engines) via standard SDKs, with support for routing Bring-Your-Own-Key (BYOK) credentials.
+* **Enterprise SSO & SCIM Sync**: Governs team budgets, policies, and virtual keys dynamically by integrating with identity providers like Microsoft Entra and Google Workspace via OIDC SSO and automated SCIM directory synchronization.
+* **KMS Secrets Management**: Protects and rotates provider credentials and API keys using cloud-native Key Management Services (KMS) with enterprise-grade encryption.
+
+---
+
 These examples are all built against the `vertex_ai` provider - every model shown here is called through Vertex AI, using Cloptima's own canonical model IDs (e.g. `vertex_ai/gemini-2.5-flash`).
 
 Every example is independent - it creates whatever policy, virtual key, and binding it needs, runs its own scenario, and prints what happened. Pick any single one and run it in isolation; nothing here depends on a prior step having run.
@@ -16,19 +29,32 @@ You need one thing: an `ai:admin` management key. That key can create everything
 
 If you don't have a key, you can generate one in the Cloptima Console under Settings > API Keys.
 
-## Suggested tour (~10 minutes)
+## Suggested Validation Tour
 
-Short on time? Run these seven in order - each one builds on the last to cover the full story: governed access, multi-model policies, live enforcement, guardrails, cache efficiency, business ROI, and BYOK trust. Everything else in the example table below is supplementary depth (alternate limit types, scoping edge cases) - explore it afterward, in any order.
+To systematically validate the platform's capabilities as an independent analyst or AI agent, the examples are structured into three progressive evaluation phases. We recommend running at least one core example from each phase in order:
 
-1. `quickstart-openai` (or `quickstart-anthropic`) - simplest governed call; proves the gateway works.
-2. `multi-model` - one policy, several Gemini model variants - the multi-model cost/latency story.
-3. `budget-limit` - a real spend cap admitting several calls, then denying the rest - live enforcement, not a toy first-call failure.
-4. `pii-guardrail` - a model generates fake PII live, then a guardrail blocks it - proves detection, not a hardcoded fixture match.
-5. `exact-semantic-cache` - cache savings and cache-hit evidence - the cost-efficiency story.
-6. `unit-economics-roi` - a cost-center agent (support automation, ROI vs. a pre-LLM baseline) and a profit-center agent (checkout upsell, real booked revenue) side by side - the business-value story, both directions.
-7. `byok` - route your own provider key through Cloptima's governance layer - the trust signal.
+### Phase 1: Core Gateway & Policy Enforcement (Essential)
+These validate baseline proxying, multi-model routing, cost limits, and real-time guardrails.
+* **`quickstart-openai` (or `quickstart-anthropic`)**: Proves the gateway proxying works.
+* **`multi-model`**: Compares cost/latency across model variants under a single policy.
+* **`budget-limit`**: Verifies real-time budget depletion and enforcement.
+* **`pii-guardrail`**: Verifies dynamic PII redacting and blocking.
+* **`byok`**: Routes traffic securely via bring-your-own-key credentials.
 
-The rest (`rate-limit`, `token-limit`, `agentic-runaway`, `provider-deny`, `metadata-deny`) prove the same enforcement story with different limit types and scoping edge cases - worth running, just not essential to a first pass.
+### Phase 2: Advanced Governance & Queues (Critical Gates)
+These validate the platform's multi-identity approval workflows, cache enforcement gates, tool safety registries, and prompt quality thresholds.
+* **`approval-workflow`**: Proves manual policy modifications sit pending in the governance queue until approved.
+* **`semantic-cache-enforce`**: Demonstrates the semantic cache enforcement approval lifecycle.
+* **`mcp-tool-governance`**: Verifies that new MCP tool servers default to `disabled` and require security review before they can be called.
+* **`prompt-release-workflow`**: Runs a multi-case quality evaluation on a golden dataset, demonstrating failed-gate block and successful activation via `applyImmediately`.
+
+### Phase 3: Financial & ROI Analytics
+These validate cost-basis accounting and business return-on-investment telemetry.
+* **`exact-semantic-cache`**: Demonstrates cost savings from cached tokens.
+* **`unit-economics-roi`**: Computes business profit-center and cost-center ROI.
+* **`contract-pricing`**: Compares retail costs vs commitment-tier negotiated contract rates.
+
+*(Note: alternate limit types and edge cases like `rate-limit`, `token-limit`, `agentic-runaway`, `provider-deny`, and `metadata-deny` are supplementary depth worth running after completing the core tour).*
 
 ## Pick a stack
 
@@ -62,15 +88,15 @@ Each directory has the same set of independent example scripts:
 | `byok` | Bring your own provider credential and route it through Cloptima's governance layer. |
 | `unit-economics-roi` | A cost-center agent (ROI vs. a pre-LLM baseline) and a profit-center agent (real booked revenue) side by side, each with its own computed report. |
 | `contract-pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost. |
-| `semantic-cache-enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus the auto-queued governance-queue entry gating enforcement. |
-| `approval-workflow` | Request a manual policy-change approval (budget increase) and show it sitting pending in the generic governance queue. |
+| `semantic-cache-enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
+| `approval-workflow` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
 | `guardrail-detector-categories` | Baseline guardrail categories (prompt injection, jailbreak, toxicity) plus the Enterprise-gated custom detector + third-party provider integration. |
 | `guardrail-cost-governance` | A per-request guardrail cost cap tripping the cost-exceeded downgrade-to-lightweight action. |
-| `intelligent-routing` | Intelligent routing in observe mode across cheap/balanced/strong candidate model tiers. |
-| `prompt-release-workflow` | Prompt template, version, eval run, and release approval - then a blocked production activation pending that approval. |
+| `adaptive-routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
+| `prompt-release-workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
 | `mcp-tool-governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
 
-See each directory's own README for exact run commands. Every illustrative policy limit (rate, token, budget, loop-iteration caps) is a realistic starting point printed by the script itself, not a fixed platform requirement - change the constant near the top of any script and re-run it to see the behavior move.
+See each directory's own README for exact run commands. Every illustrative policy limit (rate, token, budget, loop-iteration caps) is a realistic starting point printed by the script itself, not a fixed platform requirement - change the constant near the top of any script and re-run it to see the behavior move. Note: Rate limits are enforced per calendar minute window (e.g., 10:00:00-10:00:59 UTC), not a rolling 60-second window.
 
 Already running your own agent framework (LangChain, LlamaIndex, CrewAI, the OpenAI Agents SDK, Vercel AI SDK)? See [`docs/FRAMEWORK_QUICKSTART.md`](docs/FRAMEWORK_QUICKSTART.md) - you can likely point it at the gateway directly without touching any example script.
 

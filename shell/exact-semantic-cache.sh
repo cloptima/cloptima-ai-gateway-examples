@@ -6,6 +6,10 @@
 # for exact-cache evidence, then sends paraphrased variants for semantic-
 # cache evidence. There is no client-side cache toggle - this is entirely
 # policy-driven server-side; see ../docs/CACHE_AND_POLICY.md.
+# Note: because cache writes are processed in the background, a repeat fired
+# immediately after a write may transiently miss. The repeats below are
+# intentionally back-to-back to illustrate this propagation latency; do not
+# read an early miss as an error.
 # Run standalone: ./exact-semantic-cache.sh
 set -euo pipefail
 

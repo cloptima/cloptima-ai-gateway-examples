@@ -27,10 +27,27 @@ CREDENTIAL_ID=$(echo "$CREATE_RESULT" | jq -r '.createLLMProviderCredential.id')
 echo "Created credential $CREDENTIAL_ID ($(echo "$CREATE_RESULT" | jq -r '.createLLMProviderCredential.displayName'))"
 
 echo "Testing the credential against a model..."
+# testLLMProviderCredential is intentionally console-session-only (it's the
+# console's "Test" button, triggering a real live provider call) and always
+# returns FORBIDDEN over the ai:admin PAT key this repo uses - call it
+# directly instead of through graphql() (which exits on any GraphQL error)
+# so that expected FORBIDDEN doesn't abort the rest of the BYOK flow below.
 TEST_VARS=$(jq -n --arg id "$CREDENTIAL_ID" '{id: $id, input: {model: "gpt-4o-mini"}}')
-graphql 'mutation TestCredential($id: ID!, $input: TestLLMProviderCredentialInput) {
-  testLLMProviderCredential(id: $id, input: $input) { id provider displayName }
-}' "$TEST_VARS" | jq '.'
+TEST_BODY=$(jq -n --arg query 'mutation TestCredential($id: ID!, $input: TestLLMProviderCredentialInput) {
+  testLLMProviderCredential(id: $id, input: $input) { credential { id provider displayName status validationError } testedModel }
+}' --argjson variables "$TEST_VARS" '{query: $query, variables: $variables}')
+TEST_RESPONSE=$(curl -sS -X POST "$BASE_URL/graphql" \
+  -H "Authorization: Bearer $CLOPTIMA_AI_ADMIN_KEY" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" -d "$TEST_BODY")
+if echo "$TEST_RESPONSE" | jq -e '.errors' >/dev/null 2>&1; then
+  if echo "$TEST_RESPONSE" | jq -e '.errors[0].message | test("console session")' >/dev/null 2>&1; then
+    echo "(skipped: testLLMProviderCredential is console-only, not available to this PAT key - expected)"
+  else
+    echo "GraphQL error: $(echo "$TEST_RESPONSE" | jq -c '.errors')" >&2
+    exit 1
+  fi
+else
+  echo "$TEST_RESPONSE" | jq '.data'
+fi
 
 echo "Creating a policy allowing the BYOK provider/model and minting a key..."
 POLICY=$(create_policy "$(jq -n --arg name "byok-$SUFFIX" \

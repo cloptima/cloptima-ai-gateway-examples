@@ -32,12 +32,12 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `npm run byok` | Bring your own provider credential and route it through Cloptima's governance layer (needs `PROVIDER_API_KEY` in `.env`). |
 | `npm run unit-economics-roi` | A cost-center agent (ROI vs. a pre-LLM baseline) and a profit-center agent (real booked revenue) side by side, each with its own computed report. |
 | `npm run contract-pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost. |
-| `npm run semantic-cache-enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus the auto-queued governance-queue entry gating enforcement. |
-| `npm run approval-workflow` | Request a manual policy-change approval (budget increase) and show it sitting pending in the generic governance queue. |
+| `npm run semantic-cache-enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
+| `npm run approval-workflow` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
 | `npm run guardrail-detector-categories` | Baseline guardrail categories (prompt injection, jailbreak, toxicity) plus the Enterprise-gated custom detector + third-party provider integration. |
 | `npm run guardrail-cost-governance` | A per-request guardrail cost cap tripping the cost-exceeded downgrade-to-lightweight action. |
-| `npm run intelligent-routing` | Intelligent routing in observe mode across cheap/balanced/strong candidate model tiers. |
-| `npm run prompt-release-workflow` | Prompt template, version, eval run, and release approval - then a blocked production activation pending that approval. |
+| `npm run adaptive-routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
+| `npm run prompt-release-workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
 | `npm run mcp-tool-governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
 
 Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - change the constant at the top of any script and re-run it.

@@ -16,6 +16,10 @@
 # additional tool_server_auto_approval_disabled entry the 'always' call
 # doesn't get, proving that rule holds independently of (and would still
 # apply once) the tool server is reviewed and made active.
+#
+# At the end, a second tool server is registered with applyImmediately: true
+# to show the alternative: since this key already qualifies to review this
+# itself, that one activates right away instead of starting 'disabled'.
 # Run standalone: ./mcp-tool-governance.sh
 set -euo pipefail
 
@@ -114,3 +118,16 @@ echo "tool_server_auto_approval_disabled entry the 'always' call does not get - 
 echo "rule is enforced as its own, independent check that would still apply even after this tool server is"
 echo "reviewed and made active."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$APP_ID\" for both records and the pending tool-server-registration approval; Policies tab ($CONSOLE_POLICIES) shows the tool server registration and allowedToolServers config."
+
+echo ""
+echo "Registering a second tool server, this time with applyImmediately: true..."
+TOOL_SERVER_2=$(graphql \
+  'mutation CreateToolServer($input: LLMGatewayToolServerInput!) {
+    createLLMGatewayToolServer(input: $input) { id name status }
+  }' \
+  "$(jq -n --arg name "example-mcp-server-immediate-$SUFFIX" \
+    '{input: {name: $name, serverType: "mcp", serverUrl: "https://example.com/mcp", status: "active", allowedToolNames: ["search", "lookup"], applyImmediately: true}}')")
+TOOL_SERVER_2=$(echo "$TOOL_SERVER_2" | jq -c '.createLLMGatewayToolServer')
+echo "  tool server $(echo "$TOOL_SERVER_2" | jq -r '.id') - status: $(echo "$TOOL_SERVER_2" | jq -r '.status')"
+echo "Expected: status 'active' right away - applyImmediately: true meant this registration was approved and"
+echo "activated in this same call, with no separate review step and no tool_server_disabled block."

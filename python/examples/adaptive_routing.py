@@ -1,6 +1,6 @@
-"""Intelligent routing (certification/candidate contract, deterministic
+"""Adaptive routing (certification/candidate contract, deterministic
 routing decision, canary cohorts) configures a certified set of candidate
-models per cost/latency tier under policy.metadata.routing.intelligent, a
+models per cost/latency tier under policy.metadata.routing.adaptive, a
 JSON object passed as policy metadata the same way route/fallback/cache
 controls are.
 
@@ -14,7 +14,7 @@ plus a DECIDED release-gate approval - and deciding that approval is the same
 kind of human-review step this repo's examples don't script (see
 approval_workflow.py), so canary/enforce aren't demonstrated here.
 Run standalone from python/:
-    python -m examples.intelligent_routing
+    python -m examples.adaptive_routing
 """
 
 import json
@@ -34,17 +34,17 @@ CANDIDATE_MODELS = {
 
 def main():
     suffix = config.run_suffix()
-    app_id = f"intelligent-routing-{suffix}"
+    app_id = f"adaptive-routing-{suffix}"
 
-    print("Creating a policy with intelligent routing in observe mode across cheap/balanced/strong candidate tiers...")
+    print("Creating a policy with adaptive routing in observe mode across cheap/balanced/strong candidate tiers...")
     policy = create_policy({
-        "name": f"intelligent-routing-{suffix}",
+        "name": f"adaptive-routing-{suffix}",
         "mode": "enforce", "budgetMode": "hard_fast",
         "allowedProviders": ["vertex_ai"],
         "allowedModels": [*CANDIDATE_MODELS["cheap"], *CANDIDATE_MODELS["balanced"], *CANDIDATE_MODELS["strong"]],
         "metadata": {
             "routing": {
-                "intelligent": {
+                "adaptive": {
                     "mode": "observe",
                     "route_risk_ceiling": "low",
                     "candidate_set_version": f"v{suffix}",
@@ -53,7 +53,7 @@ def main():
             },
         },
     })
-    key = create_virtual_key({"name": f"vk-intelligent-routing-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
+    key = create_virtual_key({"name": f"vk-adaptive-routing-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound. Sending a few calls at the 'balanced' tier model...\n")
 
@@ -73,7 +73,7 @@ def main():
         "router logs, per call, which candidate it would have picked under this certified tier set. That decision "
         "log isn't in this script's own output; it's a console-side evidence trail."
     )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows the logged routing-decision trail per call; Policies tab ({config.CONSOLE['policies']}) shows the metadata.routing.intelligent config, including the candidate tiers above.")
+    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows the logged routing-decision trail per call; Policies tab ({config.CONSOLE['policies']}) shows the metadata.routing.adaptive config, including the candidate tiers above.")
     print(json.dumps(results, indent=2, default=str))
 
 

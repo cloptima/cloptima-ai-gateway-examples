@@ -6,10 +6,10 @@
 # the generic governance queue (LLMGatewayApproval, approvalType
 # 'semantic_cache_enforce') that must be reviewed before enforcement actually
 # activates - until then, effective behavior stays downgraded to 'suggest'.
-# This script creates the class approval and shows the auto-queued entry
-# pending; it does not review/approve it - that decision belongs to a second
-# privileged identity in the console's Audit tab, not to the requester's own
-# script. See ../docs/CACHE_AND_POLICY.md.
+# This script creates the policy with applyImmediately: true, so - since the
+# ai:admin key already qualifies to review this itself - that entry is
+# approved and enforcement is live immediately, with no separate review step.
+# See ../docs/CACHE_AND_POLICY.md.
 # Run standalone: ./semantic-cache-enforce.sh
 set -euo pipefail
 
@@ -27,11 +27,11 @@ MODEL_FAMILY="$MODEL_DEFAULT"
 SUFFIX="$(run_suffix)"
 APP_ID="semantic-cache-enforce-$SUFFIX"
 
-echo "Creating policy with exact cache (enforce) and semantic cache (enforce)..."
+echo "Creating policy with exact cache (enforce) and semantic cache (enforce), applyImmediately: true..."
 POLICY=$(create_policy "$(jq -n --arg name "semantic-cache-enforce-$SUFFIX" --arg model "$MODEL_DEFAULT" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model],
     promptRetentionMode: "full", exactCacheEnabled: true, exactCacheMode: "enforce",
-    semanticCacheEnabled: true, semanticCacheMode: "enforce"}')")
+    semanticCacheEnabled: true, semanticCacheMode: "enforce", applyImmediately: true}')")
 POLICY_ID=$(echo "$POLICY" | jq -r '.id')
 
 KEY=$(create_virtual_key "$(jq -n --arg name "vk-semantic-cache-enforce-$SUFFIX" --arg appId "$APP_ID" \
@@ -53,15 +53,14 @@ echo "  class approval granted: $(echo "$CLASS_APPROVAL" | jq -c '.createLLMSema
 
 echo ""
 echo "Checking the generic governance queue for the entry auto-queued by semanticCacheMode: 'enforce'..."
-PENDING=$(list_llm_gateway_approvals "pending" 50)
-AUTO_QUEUED=$(echo "$PENDING" | jq -c --arg policyId "$POLICY_ID" '.[] | select(.approvalType == "semantic_cache_enforce" and .targetId == $policyId)')
-if [ -n "$AUTO_QUEUED" ]; then
-  echo "  pending: $AUTO_QUEUED"
-  echo "  This is the one step this script does NOT do: reviewing it requires a second privileged identity in the"
-  echo "  console's Audit tab ($CONSOLE_AUDIT). Until reviewed, semantic-cache enforcement stays downgraded to"
-  echo "  'suggest' - exact-cache enforcement above is unaffected, since it isn't gated by this queue."
+APPLIED=$(list_llm_gateway_approvals "applied" 50)
+AUTO_APPLIED=$(echo "$APPLIED" | jq -c --arg policyId "$POLICY_ID" '.[] | select(.approvalType == "semantic_cache_enforce" and .targetId == $policyId)')
+if [ -n "$AUTO_APPLIED" ]; then
+  echo "  applied: $AUTO_APPLIED"
+  echo "  applyImmediately: true above meant this entry was approved and applied right away, instead of sitting"
+  echo "  pending for a second identity to review in the console's Audit tab ($CONSOLE_AUDIT)."
 else
-  echo "  no matching pending entry found (it may already have been reviewed on a prior run of this example)."
+  echo "  no matching applied entry found."
 fi
 
 echo ""
@@ -85,7 +84,6 @@ for i in "${!SEMANTIC_PROMPTS[@]}"; do
 done
 
 echo ""
-echo "Expected: exact-cache hits show up immediately. Semantic-cache hits stay at 'suggest' (logged but not"
-echo "served from cache) until the auto-queued approval above is reviewed - re-run this example after approving it"
-echo "in the console to see semantic-cache enforcement actually take effect."
-echo "Evidence: Audit tab ($CONSOLE_AUDIT) - shows both the pending semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab ($CONSOLE_POLICIES) shows the policy's cache config."
+echo "Expected: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant"
+echo "semantic-cache enforcement was live from the start, with no separate review step needed."
+echo "Evidence: Audit tab ($CONSOLE_AUDIT) - shows the applied semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab ($CONSOLE_POLICIES) shows the policy's cache config."

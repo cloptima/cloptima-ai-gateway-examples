@@ -19,6 +19,10 @@ A policy-level setting called `exactCacheKeyScope` controls which attribution di
 
 The only client-invocable cache-affecting action is the `invalidateLLMExactCache` GraphQL mutation (scoped by app/policy/model), which requires the `ai:admin` key. It doesn't delete entries directly - it bumps a generation counter so old entries stop matching. This is a governance action for an admin to take deliberately, not something an inference call can trigger.
 
+## Caching latency and propagation
+
+To maximize performance, cache writes are processed in the background. Because of this brief propagation delay, rapid-fire repeats sent immediately after a cache miss may fall through to the provider before the cache entry is fully active. Give the gateway a moment to index the new response before testing subsequent repeats.
+
 ## Semantic cache has an extra approval gate
 
 Even with `semanticCacheMode: "enforce"` set on a policy, semantic-cache enforcement additionally requires a per-`(app, content_class, model_family)` approval before it actually enforces (it downgrades to `suggest` until approved). This is intentional - semantic matches are approximate, so enforcement is opt-in per content type, not a blanket policy switch. Neither approval step is something a client request can trigger or bypass.

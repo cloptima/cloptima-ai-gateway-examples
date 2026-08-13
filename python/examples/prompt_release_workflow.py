@@ -2,28 +2,143 @@
 template, draft a version, back an eval run with a dataset, and gate
 promotion behind that eval plus a release approval.
 
-An eval run only counts as release-gate evidence for a prompt version when
-created with subjectRef: { recommendation_id: versionId } and targetKind:
-'prompt_change'. For a production-environment template, activating a
-version checks the release gate and returns a 409 if the release approval
-hasn't been DECIDED yet - and deciding it is the same kind of human-review
-step approval_workflow.py doesn't script either, so this example expects
-and prints that 409 as the demonstrated behavior, not a failure. No live
-gateway inference call here - this is a content/release-governance flow,
-not a runtime-enforcement one.
+To demonstrate the evaluation engine's automated validation capability,
+this script first sends baseline requests through the gateway to generate
+audit logs, builds a golden dataset from those logs, and labels them with
+expected outputs. It then runs deterministic evaluation runs: first a failing
+run to show quality gates blocking production activation, and then a passing
+run that allows activation to succeed.
+
+For a production-environment template, activating a version checks the
+release gate and returns a 409 if the release approval hasn't been
+DECIDED yet. At the end, the same release approval is requested again with
+applyImmediately: true. Since this key already qualifies to decide it
+itself and the evaluation is passing, it's approved right away and activation succeeds.
 Run standalone from python/:
     python -m examples.prompt_release_workflow
 """
 
 import json
+import time
+import requests
 
 from lib import config
-from lib.gateway_admin import graphql
+from lib.gateway_admin import graphql, create_policy, create_virtual_key, create_binding
 
 
 def main():
     suffix = config.run_suffix()
     app_id = f"prompt-release-{suffix}"
+
+    print("Creating baseline policy and virtual key...")
+    policy = create_policy({
+        "name": f"prompt-release-policy-{suffix}",
+        "mode": "enforce",
+        "budgetMode": "hard_fast",
+        "allowedProviders": ["vertex_ai"],
+        "allowedModels": ["vertex_ai/gemini-2.5-flash"],
+        "promptRetentionMode": "full"
+    })
+
+    key = create_virtual_key({
+        "name": f"vk-prompt-release-{suffix}",
+        "teamId": "Platform AI",
+        "appId": app_id,
+        "environment": "production"
+    })
+    access_token = key["accessToken"]
+
+    create_binding({
+        "policyId": policy["id"],
+        "teamId": "Platform AI",
+        "appId": app_id,
+        "environment": "production",
+        "priority": 10,
+        "acknowledgeOverlap": True
+    })
+    print("  Policy bound, waiting for binding propagation...")
+    time.sleep(3)
+
+    def call_chat(prompt: str, label: str):
+        response = requests.post(
+            f"{config.BASE_URL}/v1/ai/chat/completions",
+            headers={
+                "content-type": "application/json",
+                "user-agent": config.USER_AGENT,
+                "authorization": f"Bearer {access_token}",
+                "x-cloptima-team": "Platform AI",
+                "x-cloptima-app": app_id,
+                "x-cloptima-environment": "production",
+            },
+            json={"model": "vertex_ai/gemini-2.5-flash", "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        print(f"  [{'allowed' if response.status_code == 200 else 'blocked'}] {label} (http {response.status_code})")
+
+    print("Sending live chat calls to generate audit logs...")
+    call_chat(
+        "In one word (auth/billing/technical), classify this support ticket: I forgot my password, how do I reset it?",
+        "ticket-1-auth"
+    )
+    call_chat(
+        "In one word (auth/billing/technical), classify this support ticket: I was charged twice for my premium account.",
+        "ticket-2-billing"
+    )
+
+    print("  Sent requests, waiting for logs to flush...")
+    time.sleep(3)
+
+    print("Creating a golden dataset filtering by App ID...")
+    dataset_data = graphql(
+        """mutation CreateDataset($input: LLMDatasetInput!) {
+          createLLMDataset(input: $input) { id name recordCount }
+        }""",
+        {"input": {
+            "name": f"prompt-release-workflow-dataset-{suffix}",
+            "description": "Example dataset for prompt-release-workflow",
+            "appId": app_id,
+            "isGolden": True,
+        }},
+    )
+    dataset = dataset_data["createLLMDataset"]
+    print(f"  dataset {dataset['id']} (recordCount={dataset['recordCount']})")
+
+    if dataset["recordCount"] < 2:
+        raise RuntimeError(f"Error: Golden dataset contains {dataset['recordCount']} records, expected at least 2!")
+
+    print("Retrieving dataset records to get expected output...")
+    dataset_info = graphql(
+        """query GetDataset($id: ID!) {
+          llmDataset(id: $id, includeRecords: true) {
+            id
+            records
+          }
+        }""",
+        {"id": dataset["id"]},
+    )
+    records = dataset_info["llmDataset"]["records"]
+    # Sort records by created_at ascending to align them with prompt execution order
+    records.sort(key=lambda r: r["created_at"])
+    r1_id = records[0]["id"]
+    r2_id = records[1]["id"]
+    print(f"  record 1 ID: {r1_id} (Expected: auth)")
+    print(f"  record 2 ID: {r2_id} (Expected: billing)")
+
+    print("Setting expected output labels on the records...")
+    graphql(
+        """mutation SetLabels($input: LLMDatasetLabelsInput!) {
+          setLLMDatasetLabels(input: $input) { id }
+        }""",
+        {
+            "input": {
+                "datasetId": dataset["id"],
+                "expectedOutputs": {
+                    r1_id: "auth",
+                    r2_id: "billing",
+                },
+            }
+        },
+    )
 
     print("Creating a production-environment prompt template...")
     template_data = graphql(
@@ -33,7 +148,7 @@ def main():
         {"input": {
             "name": f"prompt-release-workflow-{suffix}",
             "owner": "cloptima-ai-gateway-examples",
-            "description": "Support-ticket acknowledgement prompt (example run)",
+            "description": "Intent Classifier Prompt",
             "appId": app_id, "environment": "production",
         }},
     )
@@ -48,8 +163,8 @@ def main():
         {
             "templateId": template["id"],
             "input": {
-                "content": "Draft a one-sentence acknowledgement reply to this customer support ticket:\n\n{{ticket_text}}",
-                "changeSummary": "Initial draft",
+                "content": "Intent Classifier template v1",
+                "changeSummary": "Initial version",
                 "activate": False,
             },
         },
@@ -57,23 +172,9 @@ def main():
     version = version_data["createLLMPromptVersion"]
     print(f"  version {version['id']} (status={version['status']})")
 
-    print("Creating a dataset to back the eval run...")
-    dataset_data = graphql(
-        """mutation CreateDataset($input: LLMDatasetInput!) {
-          createLLMDataset(input: $input) { id name recordCount }
-        }""",
-        {"input": {
-            "name": f"prompt-release-workflow-dataset-{suffix}",
-            "description": "Example dataset for prompt-release-workflow",
-            "appId": app_id,
-            "isGolden": False,
-        }},
-    )
-    dataset = dataset_data["createLLMDataset"]
-    print(f"  dataset {dataset['id']} (recordCount={dataset['recordCount']})")
-
-    print("Running an eval against this version (subjectRef.recommendation_id must equal the version id)...")
-    eval_run_data = graphql(
+    print("Running deterministic evaluation run with failing candidate output config...")
+    # We pass a wrong output for record 2 ('technical' instead of 'billing') to fail the 80% threshold
+    eval_run_fail = graphql(
         """mutation CreateEvalRun($input: LLMEvalRunInput!) {
           createLLMEvalRun(input: $input) { id status passed }
         }""",
@@ -83,43 +184,97 @@ def main():
             "targetKind": "prompt_change",
             "subjectRef": {"recommendation_id": version["id"]},
             "runNow": True,
+            "threshold": 0.8,
+            "config": {
+                "candidate_outputs": {
+                    r1_id: "auth",
+                    r2_id: "technical",
+                }
+            }
         }},
-    )
-    eval_run = eval_run_data["createLLMEvalRun"]
-    print(f"  eval run {eval_run['id']} (status={eval_run['status']}, passed={eval_run['passed']})")
+    )["createLLMEvalRun"]
+    print(f"  failing eval run {eval_run_fail['id']} (status={eval_run_fail['status']}, passed={eval_run_fail['passed']})")
 
-    print("Requesting a release approval for the production promotion (subjectKind: prompt_deployment)...")
-    release_approval_data = graphql(
+    print("Requesting release approval with applyImmediately: true for the failing eval run...")
+    release_approval_fail = graphql(
         """mutation CreateReleaseApproval($input: LLMReleaseApprovalInput!) {
-          createLLMReleaseApproval(input: $input) { id state subjectKind subjectId }
+          createLLMReleaseApproval(input: $input) { id state }
         }""",
         {"input": {
             "subjectKind": "prompt_deployment",
             "subjectId": version["id"],
-            "evalRunId": eval_run["id"],
+            "evalRunId": eval_run_fail["id"],
+            "applyImmediately": True,
         }},
-    )
-    release_approval = release_approval_data["createLLMReleaseApproval"]
-    print(f"  release approval {release_approval['id']} (state={release_approval['state']})")
+    )["createLLMReleaseApproval"]
+    print(f"  release approval {release_approval_fail['id']} (state={release_approval_fail['state']})")
 
-    print("\nAttempting to activate the version (expected to be blocked - the release approval above is pending, not decided)...")
+    print("\nAttempting to activate the version (expected to be blocked - the evaluation run failed the quality gate)...")
     try:
-        activated_data = graphql(
+        graphql(
             """mutation Activate($templateId: ID!, $versionId: ID!) {
               activateLLMPromptVersion(templateId: $templateId, versionId: $versionId) { id status }
             }""",
             {"templateId": template["id"], "versionId": version["id"]},
         )
-        print(f"  activated: {json.dumps(activated_data['activateLLMPromptVersion'])} (unexpected unless the release approval was already decided on a prior run)")
+        print("  activated (unexpected)")
     except RuntimeError as err:
         print(f"  blocked: {err}")
         print(
-            "  Expected: HTTP 409 - production activation is gated on the release approval being DECIDED, not just "
-            "requested. Deciding it (decideLLMReleaseApproval) is a second-identity review step in the console, not "
-            "something this script does on the requester's own behalf. Re-run activation after approving in the console."
+            "  Expected: HTTP 409 - production activation is blocked because the release approval remained pending\n"
+            "  (gate failed due to the latest evaluation run scoring 50% vs required 80% threshold)."
         )
 
-    print(f"\nEvidence: Audit tab ({config.CONSOLE['audit']}) shows the pending release approval; Policies tab ({config.CONSOLE['policies']}) area's prompt registry view remains in draft / pending-release status until approved.")
+    print("\nRunning deterministic evaluation run with passing candidate output config...")
+    # We pass the correct output ('billing') to satisfy the 80% threshold
+    eval_run_pass = graphql(
+        """mutation CreateEvalRun($input: LLMEvalRunInput!) {
+          createLLMEvalRun(input: $input) { id status passed }
+        }""",
+        {"input": {
+            "datasetId": dataset["id"],
+            "evalType": "deterministic",
+            "targetKind": "prompt_change",
+            "subjectRef": {"recommendation_id": version["id"]},
+            "runNow": True,
+            "threshold": 0.8,
+            "config": {
+                "candidate_outputs": {
+                    r1_id: "auth",
+                    r2_id: "billing",
+                }
+            }
+        }},
+    )["createLLMEvalRun"]
+    print(f"  passing eval run {eval_run_pass['id']} (status={eval_run_pass['status']}, passed={eval_run_pass['passed']})")
+
+    print("Requesting release approval with applyImmediately: true for the passing eval run...")
+    release_approval_pass = graphql(
+        """mutation CreateReleaseApproval($input: LLMReleaseApprovalInput!) {
+          createLLMReleaseApproval(input: $input) { id state }
+        }""",
+        {"input": {
+            "subjectKind": "prompt_deployment",
+            "subjectId": version["id"],
+            "evalRunId": eval_run_pass["id"],
+            "applyImmediately": True,
+        }},
+    )["createLLMReleaseApproval"]
+    print(f"  release approval {release_approval_pass['id']} (state={release_approval_pass['state']})")
+
+    print("\nRetrying activation now that the passing release approval is decided...")
+    activated_pass = graphql(
+        """mutation Activate($templateId: ID!, $versionId: ID!) {
+          activateLLMPromptVersion(templateId: $templateId, versionId: $versionId) { id status }
+        }""",
+        {"templateId": template["id"], "versionId": version["id"]},
+    )["activateLLMPromptVersion"]
+    print(f"  activated: {json.dumps(activated_pass)}")
+    print(
+        "Expected: this activation succeeds - applyImmediately: true auto-approved the gate because the latest\n"
+        "evaluation run met the 80% quality threshold."
+    )
+    print(f"\nEvidence: Audit tab ({config.CONSOLE['audit']}) shows both release approvals - the first still pending (failed gate), the second already decided; Policies tab ({config.CONSOLE['policies']}) shows this version now active.")
 
 
 if __name__ == "__main__":
