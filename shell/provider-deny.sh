@@ -27,7 +27,7 @@ echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Requesting a non-Vertex mo
 echo ""
 
 call_chat "$ACCESS_TOKEN" "openai/gpt-4o" "This call should be denied - non-Vertex provider." \
-  "provider-deny-probe" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev"
+  "provider-deny-probe"
 jq '.' "$RESP_BODY_FILE"
 
 echo ""

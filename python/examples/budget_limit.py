@@ -30,16 +30,13 @@ MAX_TOKENS_PER_CALL = 100
 MAX_CALLS = 60
 
 
-def call_chat(virtual_key: str, model: str, prompt: str, app_id: str) -> dict:
+def call_chat(virtual_key: str, model: str, prompt: str) -> dict:
     response = requests.post(
         f"{config.BASE_URL}/v1/ai/chat/completions",
         headers={
             "content-type": "application/json",
             "user-agent": config.USER_AGENT,
             "authorization": f"Bearer {virtual_key}",
-            "x-cloptima-team": "Platform AI",
-            "x-cloptima-app": app_id,
-            "x-cloptima-environment": "dev",
         },
         json={"model": model, "max_tokens": MAX_TOKENS_PER_CALL, "messages": [{"role": "user", "content": prompt}]},
         timeout=30,
@@ -68,7 +65,7 @@ def main():
 
     results = []
     for i in range(MAX_CALLS):
-        result = call_chat(key["accessToken"], MODEL_DEFAULT, f'Budget probe {i + 1}. Reply with just "ok".', app_id)
+        result = call_chat(key["accessToken"], MODEL_DEFAULT, f'Budget probe {i + 1}. Reply with just "ok".')
         results.append({"label": f"call-{i + 1}", **result})
         print(f"  [{'allowed' if result['status'] == 200 else 'blocked'}] call-{i + 1} status={result['status']}")
         if result["status"] != 200:

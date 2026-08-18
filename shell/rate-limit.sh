@@ -34,7 +34,7 @@ echo ""
 ALLOWED_COUNT=0
 for i in $(seq 1 "$CALLS_TO_FIRE"); do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "Rate limit probe $i. Reply with just \"ok\"." \
-    "call-$i" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev"
+    "call-$i"
   if [ "$LAST_OUTCOME" = "allowed" ]; then
     ALLOWED_COUNT=$((ALLOWED_COUNT + 1))
   else

@@ -107,7 +107,6 @@ async function main() {
     const result = await callOpenAIStyle(supportClient, {
       model: MODELS.default, prompt,
       headers: attributionHeaders({
-        teamId: 'Support Automation', appId: supportAppId, environment: 'prod',
         businessTransactionType: COST_CENTER_TRANSACTION_TYPE,
         businessTransactionId: `${suffix}-support-${i}`,
         businessTransactionUnitCount: 1,
@@ -157,7 +156,6 @@ async function main() {
     const result = await callOpenAIStyle(upsellClient, {
       model: MODELS.default, prompt,
       headers: attributionHeaders({
-        teamId: 'Checkout Upsell', appId: upsellAppId, environment: 'prod',
         businessTransactionType: PROFIT_CENTER_TRANSACTION_TYPE,
         businessTransactionId: `${suffix}-upsell-${i}`,
         businessTransactionUnitCount: 1,

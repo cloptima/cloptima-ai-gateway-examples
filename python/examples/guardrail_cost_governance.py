@@ -56,7 +56,6 @@ def main():
     result = call_openai_style(
         client, MODEL_DEFAULT,
         "In one sentence, confirm this call ran under a guardrail cost-governance policy.",
-        {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev"},
         "cost-governance-probe",
     )
 

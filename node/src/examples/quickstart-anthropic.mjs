@@ -36,7 +36,6 @@ async function main() {
   const result = await callAnthropicStyle(client, {
     model: MODELS.default,
     prompt: 'In one sentence, confirm this call went through Cloptima\'s managed AI gateway.',
-    headers: { 'x-cloptima-team': 'Quickstart', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev' },
     label: 'quickstart-anthropic',
   });
 

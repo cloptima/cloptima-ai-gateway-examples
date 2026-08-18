@@ -49,7 +49,6 @@ def main():
         result = call_openai_style(
             client, model,
             "In one short sentence, name the model you are.",
-            {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev"},
             model,
         )
         results.append(result)

@@ -65,7 +65,6 @@ CALL_BODY=$(jq -n '{model: "openai/gpt-4o-mini", messages: [{role: "user", conte
 curl -sS -X POST "$BASE_URL/v1/ai/chat/completions" \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
   -H "x-cloptima-provider-credential-id: $CREDENTIAL_ID" \
-  -H "x-cloptima-team: Platform AI" -H "x-cloptima-app: $APP_ID" -H "x-cloptima-environment: dev" \
   -d "$CALL_BODY" | jq '.'
 
 echo ""

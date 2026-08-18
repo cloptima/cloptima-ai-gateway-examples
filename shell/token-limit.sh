@@ -30,7 +30,7 @@ echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Requesting a long response
 echo ""
 
 call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "Write a detailed 500-word essay about the history of cloud computing." \
-  "token-limit-probe" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev"
+  "token-limit-probe"
 jq '.' "$RESP_BODY_FILE"
 
 echo ""

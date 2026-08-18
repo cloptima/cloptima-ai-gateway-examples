@@ -31,14 +31,13 @@ import { config, runSuffix, CONSOLE, USER_AGENT } from '../lib/config.mjs';
 import { graphql, createPolicy, createVirtualKey, createBinding, listLLMGatewayApprovals } from '../lib/gatewayAdmin.mjs';
 import { MODELS } from '../lib/models.mjs';
 
-async function callResponsesApi(accessToken, appId, requireApproval, serverLabel) {
+async function callResponsesApi(accessToken, requireApproval, serverLabel) {
   const response = await fetch(`${config.baseUrl}/v1/ai/responses`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'user-agent': USER_AGENT,
       authorization: `Bearer ${accessToken}`,
-      'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev',
     },
     body: JSON.stringify({
       model: MODELS.default,
@@ -123,11 +122,11 @@ async function main() {
   console.log(`  simulation: ${JSON.stringify(simulation)}`);
 
   console.log("\nCalling the Responses API with require_approval: 'always'...");
-  const alwaysResult = await callResponsesApi(key.accessToken, appId, 'always', serverLabel);
+  const alwaysResult = await callResponsesApi(key.accessToken, 'always', serverLabel);
   console.log(`  [${alwaysResult.outcome}] ${JSON.stringify(alwaysResult)}`);
 
   console.log("\nCalling again with require_approval: 'never'...");
-  const neverResult = await callResponsesApi(key.accessToken, appId, 'never', serverLabel);
+  const neverResult = await callResponsesApi(key.accessToken, 'never', serverLabel);
   console.log(`  [${neverResult.outcome}] ${JSON.stringify(neverResult)}`);
 
   console.log(

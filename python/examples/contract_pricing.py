@@ -20,7 +20,11 @@ from lib.models import MODEL_DEFAULT
 
 # vertex_ai/gemini-2.5-flash retail: $0.30 in / $2.50 out per million tokens
 # (Cloptima's default LLM pricing catalog). ~20% off both - a realistic
-# volume discount for a mid-size enterprise agreement.
+# volume discount for a mid-size enterprise agreement. No cached-token rate
+# is negotiated here - a real procurement conversation prices input and
+# output tokens, not a platform caching mechanism, so this leaves the cache
+# rate unset and lets it resolve proportionally from retail instead of
+# guessing a number.
 PROVIDER = "vertex_ai"
 MODEL = MODEL_DEFAULT.split("/")[-1]
 CONTRACT_INPUT_RATE = 0.24
@@ -66,7 +70,6 @@ def main():
                 "model": MODEL,
                 "inputRatePerMillion": CONTRACT_INPUT_RATE,
                 "outputRatePerMillion": CONTRACT_OUTPUT_RATE,
-                "cachedInputRatePerMillion": CONTRACT_INPUT_RATE,
                 "effectiveStart": now.isoformat(),
                 "effectiveEnd": effective_end.isoformat(),
             }],
@@ -116,7 +119,6 @@ def main():
     for i, prompt in enumerate(prompts):
         result = call_openai_style(
             client, MODEL_DEFAULT, prompt,
-            {"x-cloptima-team": "Finance", "x-cloptima-app": app_id, "x-cloptima-environment": "prod"},
             f"contract-call-{i + 1}",
         )
         print(f"  [{result['outcome']}] contract-call-{i + 1}")

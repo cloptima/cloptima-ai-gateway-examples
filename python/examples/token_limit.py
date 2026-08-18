@@ -37,7 +37,6 @@ def main():
     result = call_openai_style(
         client, MODEL_DEFAULT,
         "Write a detailed 500-word essay about the history of cloud computing.",
-        {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev"},
         "token-limit-probe",
     )
 

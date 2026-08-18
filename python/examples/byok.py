@@ -74,9 +74,6 @@ def main():
             "user-agent": config.USER_AGENT,
             "authorization": f"Bearer {key['accessToken']}",
             "x-cloptima-provider-credential-id": credential_id,
-            "x-cloptima-team": "Platform AI",
-            "x-cloptima-app": app_id,
-            "x-cloptima-environment": "dev",
         },
         json={
             "model": "openai/gpt-4o-mini",

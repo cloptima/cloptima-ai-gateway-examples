@@ -48,8 +48,8 @@ def main():
     for i in range(5):
         result = call_openai_style(
             client, MODEL_DEFAULT, exact_prompt,
-            {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev", "x-cloptima-feature": "exact_cache_probe"},
             f"exact-cache-{i + 1}",
+            {"x-cloptima-feature": "exact_cache_probe"},
         )
         exact_results.append(result)
         print(f"  [{result['outcome']}] exact-cache-{i + 1}")
@@ -64,8 +64,8 @@ def main():
     for i, prompt in enumerate(semantic_prompts):
         result = call_openai_style(
             client, MODEL_DEFAULT, prompt,
-            {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev", "x-cloptima-feature": "semantic_cache_probe"},
             f"semantic-cache-{i + 1}",
+            {"x-cloptima-feature": "semantic_cache_probe"},
         )
         semantic_results.append(result)
         print(f"  [{result['outcome']}] semantic-cache-{i + 1}")

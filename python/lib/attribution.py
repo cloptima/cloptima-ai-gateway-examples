@@ -4,11 +4,6 @@ def attribution_headers(
     environment=None,
     feature=None,
     workflow_id=None,
-    agent_session_id=None,
-    agent_run_id=None,
-    parent_execution_id=None,
-    tool_name=None,
-    tool_call_id=None,
     business_transaction_type=None,
     business_transaction_id=None,
     business_transaction_unit_count=None,
@@ -17,7 +12,11 @@ def attribution_headers(
     business_value_cents=None,
 ):
     """Maps demo-friendly field names to the x-cloptima-* attribution headers
-    the managed gateway reads (see docs/ENVIRONMENT.md for the full header table).
+    the managed gateway reads (see docs/ENVIRONMENT.md for the full header
+    table). These affect only cost/ROI reporting, never which requests are
+    allowed or blocked - team_id/app_id/environment are only meaningful here
+    for a key that wasn't already minted scoped to them; a key created with
+    its own teamId/appId/environment doesn't need them repeated per call.
     """
     fields = {
         "x-cloptima-team": team_id,
@@ -25,11 +24,6 @@ def attribution_headers(
         "x-cloptima-environment": environment,
         "x-cloptima-feature": feature,
         "x-cloptima-workflow": workflow_id,
-        "x-cloptima-agent-session-id": agent_session_id,
-        "x-cloptima-agent-run-id": agent_run_id,
-        "x-cloptima-parent-execution-id": parent_execution_id,
-        "x-cloptima-tool-name": tool_name,
-        "x-cloptima-tool-call-id": tool_call_id,
         "x-cloptima-business-transaction-type": business_transaction_type,
         "x-cloptima-business-transaction-id": business_transaction_id,
         "x-cloptima-business-transaction-unit-count": business_transaction_unit_count,

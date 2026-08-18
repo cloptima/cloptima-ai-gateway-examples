@@ -55,7 +55,6 @@ def main():
         "Generate a short, entirely fictional customer support ticket transcript for a QA test. "
         "Include a clearly fake SSN in XXX-XX-XXXX format, a fake 16-digit credit card number, a fake email "
         "address, and a fake phone number - all obviously placeholder values, never real. Output only the ticket text.",
-        {"x-cloptima-team": "Platform AI", "x-cloptima-app": generator_app_id, "x-cloptima-environment": "dev"},
         "generate-fixture",
     )
     generated_text = generation.get("text") or ""
@@ -65,7 +64,6 @@ def main():
     guarded = call_openai_style(
         guarded_client, MODEL_DEFAULT,
         f"A customer submitted this support ticket. Draft a one-sentence acknowledgement reply.\n\n{generated_text}",
-        {"x-cloptima-team": "Platform AI", "x-cloptima-app": guarded_app_id, "x-cloptima-environment": "dev"},
         "pii-guardrail-probe",
     )
 

@@ -52,7 +52,7 @@ echo ""
 
 for i in 1 2 3; do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "Routing probe $i. In one sentence, confirm this call went through." \
-    "routing-probe-$i" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev"
+    "routing-probe-$i"
 done
 
 echo ""

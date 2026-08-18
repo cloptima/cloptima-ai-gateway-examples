@@ -15,7 +15,11 @@ load_env
 
 # vertex_ai/gemini-2.5-flash retail: $0.30 in / $2.50 out per million tokens
 # (Cloptima's default LLM pricing catalog). ~20% off both - a realistic
-# volume discount for a mid-size enterprise agreement.
+# volume discount for a mid-size enterprise agreement. No cached-token rate
+# is negotiated here - a real procurement conversation prices input and
+# output tokens, not a platform caching mechanism, so this leaves the cache
+# rate unset and lets it resolve proportionally from retail instead of
+# guessing a number.
 PROVIDER="vertex_ai"
 MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
 MODEL="gemini-2.5-flash"
@@ -37,7 +41,7 @@ echo "  price sheet $(echo "$PRICE_SHEET" | jq -r '.createPriceSheet.name') -> $
 echo "Adding the negotiated rate override..."
 OVERRIDE_VARS=$(jq -n --arg priceSheetId "$PRICE_SHEET_ID" --arg provider "$PROVIDER" --arg model "$MODEL" \
   --argjson inputRate "$CONTRACT_INPUT_RATE" --argjson outputRate "$CONTRACT_OUTPUT_RATE" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
-{priceSheetId: $priceSheetId, overrides: [{provider: $provider, model: $model, inputRatePerMillion: $inputRate, outputRatePerMillion: $outputRate, cachedInputRatePerMillion: $inputRate, effectiveStart: $start, effectiveEnd: $end}]}')
+{priceSheetId: $priceSheetId, overrides: [{provider: $provider, model: $model, inputRatePerMillion: $inputRate, outputRatePerMillion: $outputRate, effectiveStart: $start, effectiveEnd: $end}]}')
 graphql 'mutation AddRateOverrides($priceSheetId: ID!, $overrides: [RateOverrideInput!]!) { addRateOverrides(priceSheetId: $priceSheetId, overrides: $overrides) { id provider model inputRatePerMillion outputRatePerMillion } }' \
   "$OVERRIDE_VARS" >/dev/null
 
@@ -69,8 +73,7 @@ PROMPTS=(
 VERIFICATION_START=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 ALLOWED_COUNT=0
 for i in "${!PROMPTS[@]}"; do
-  call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "${PROMPTS[$i]}" "contract-call-$((i + 1))" \
-    "x-cloptima-team: Finance" "x-cloptima-app: $APP_ID" "x-cloptima-environment: prod"
+  call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "${PROMPTS[$i]}" "contract-call-$((i + 1))"
   if [ "$LAST_OUTCOME" = "allowed" ]; then
     ALLOWED_COUNT=$((ALLOWED_COUNT + 1))
   fi

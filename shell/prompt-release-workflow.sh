@@ -42,11 +42,11 @@ sleep 3
 echo "Sending live chat calls to generate audit logs..."
 call_chat "$ACCESS_TOKEN" "vertex_ai/gemini-2.5-flash" \
   "In one word (auth/billing/technical), classify this support ticket: I forgot my password, how do I reset it?" \
-  "ticket-1-auth" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: production"
+  "ticket-1-auth"
 
 call_chat "$ACCESS_TOKEN" "vertex_ai/gemini-2.5-flash" \
   "In one word (auth/billing/technical), classify this support ticket: I was charged twice for my premium account." \
-  "ticket-2-billing" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: production"
+  "ticket-2-billing"
 
 echo "  Sent requests, waiting for logs to flush..."
 sleep 3

@@ -44,7 +44,7 @@ echo ""
 
 for model in "${MODELS[@]}"; do
   call_chat "$ACCESS_TOKEN" "$model" "In one short sentence, name the model you are." \
-    "$model" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev"
+    "$model"
   jq -c '{status: (.error // .choices[0].message.content // .)}' "$RESP_BODY_FILE" 2>/dev/null || cat "$RESP_BODY_FILE"
 done
 

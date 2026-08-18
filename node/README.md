@@ -24,9 +24,10 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `npm run rate-limit` | A realistic per-minute request cap tripping after several calls. |
 | `npm run token-limit` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `npm run budget-limit` | A small daily spend cap admitting several calls, then denying the rest. |
-| `npm run agentic-runaway` | Retry/loop-iteration limits catching a simulated runaway agent loop. |
+| `npm run agentic-runaway` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
 | `npm run pii-guardrail` | A model generates fake PII live, then a guardrail-enforced key blocks it. |
 | `npm run exact-semantic-cache` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
+| `npm run conversation-prompt-caching` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `npm run provider-deny` | A non-Vertex model request blocked by a Vertex-only policy. |
 | `npm run metadata-deny` | A deliberately unscoped key with no attribution headers, blocked. |
 | `npm run byok` | Bring your own provider credential and route it through Cloptima's governance layer (needs `PROVIDER_API_KEY` in `.env`). |

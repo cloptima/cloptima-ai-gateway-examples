@@ -41,7 +41,7 @@ echo ""
 
 call_chat "$(echo "$GENERATOR_KEY" | jq -r '.accessToken')" "$MODEL_DEFAULT" \
   "Generate a short, entirely fictional customer support ticket transcript for a QA test. Include a clearly fake SSN in XXX-XX-XXXX format, a fake 16-digit credit card number, a fake email address, and a fake phone number - all obviously placeholder values, never real. Output only the ticket text." \
-  "generate-fixture" "x-cloptima-team: Platform AI" "x-cloptima-app: $GENERATOR_APP_ID" "x-cloptima-environment: dev"
+  "generate-fixture"
 GENERATED_TICKET="$(jq -r '.choices[0].message.content // empty' "$RESP_BODY_FILE")"
 echo "Generated ticket (fed into the guardrail-enforced call below):"
 echo "  ${GENERATED_TICKET:0:300}..."
@@ -51,7 +51,7 @@ call_chat "$(echo "$GUARDED_KEY" | jq -r '.accessToken')" "$MODEL_DEFAULT" \
   "A customer submitted this support ticket. Draft a one-sentence acknowledgement reply.
 
 $GENERATED_TICKET" \
-  "pii-guardrail-probe" "x-cloptima-team: Platform AI" "x-cloptima-app: $GUARDED_APP_ID" "x-cloptima-environment: dev"
+  "pii-guardrail-probe"
 jq '.' "$RESP_BODY_FILE"
 
 echo ""

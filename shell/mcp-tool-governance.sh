@@ -43,7 +43,7 @@ call_responses_api() {
     '{model: $model, input: $input, tools: [{type: "mcp", server_label: $serverLabel, allowed_tools: ["search"], require_approval: $requireApproval}]}')
   LAST_HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/responses" \
     -H "Authorization: Bearer $access_token" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
-    -H "x-cloptima-team: Platform AI" -H "x-cloptima-app: $APP_ID" -H "x-cloptima-environment: dev" -d "$body")
+    -d "$body")
   LAST_OUTCOME=$(outcome_for_status "$LAST_HTTP_CODE")
   echo "  [$LAST_OUTCOME] $label (http $LAST_HTTP_CODE)"
 }

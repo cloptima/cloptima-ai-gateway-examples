@@ -48,7 +48,7 @@ for i in $(seq 1 "$MAX_CALLS"); do
     '{model: $model, max_tokens: $maxTokens, messages: [{role: "user", content: $prompt}]}')
   HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
     -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
-    -H "x-cloptima-team: Platform AI" -H "x-cloptima-app: $APP_ID" -H "x-cloptima-environment: dev" -d "$BODY")
+    -d "$BODY")
   if [ "$HTTP_CODE" = "200" ]; then
     echo "  [allowed] call-$i (http $HTTP_CODE)"
     ALLOWED_COUNT=$((ALLOWED_COUNT + 1))

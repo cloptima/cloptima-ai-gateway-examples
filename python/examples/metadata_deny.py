@@ -43,7 +43,6 @@ def main():
     result = call_openai_style(
         client, MODEL_DEFAULT,
         "This call should be denied - the key is deliberately unscoped and no attribution metadata is sent.",
-        {},
         "metadata-deny-probe",
     )
 

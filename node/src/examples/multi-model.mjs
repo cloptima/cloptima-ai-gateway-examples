@@ -46,7 +46,6 @@ async function main() {
     const result = await callOpenAIStyle(client, {
       model,
       prompt: 'In one short sentence, name the model you are.',
-      headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev' },
       label: model,
     });
     results.push(result);

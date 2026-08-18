@@ -41,7 +41,6 @@ def main():
         result = call_openai_style(
             client, MODEL_DEFAULT,
             f'Rate limit probe {i + 1}. Reply with just "ok".',
-            {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev"},
             f"call-{i + 1}",
         )
         results.append(result)

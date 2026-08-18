@@ -41,7 +41,6 @@ def main():
     result = call_anthropic_style(
         client, MODEL_DEFAULT,
         "In one sentence, confirm this call went through Cloptima's managed AI gateway.",
-        {"x-cloptima-team": "Quickstart", "x-cloptima-app": app_id, "x-cloptima-environment": "dev"},
         "quickstart-anthropic",
     )
 

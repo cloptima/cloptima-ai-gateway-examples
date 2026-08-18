@@ -37,14 +37,13 @@ from lib.gateway_admin import create_binding, create_policy, create_virtual_key,
 from lib.models import MODEL_DEFAULT
 
 
-def call_responses_api(access_token: str, app_id: str, require_approval: str, server_label: str) -> dict:
+def call_responses_api(access_token: str, require_approval: str, server_label: str) -> dict:
     response = requests.post(
         f"{config.BASE_URL}/v1/ai/responses",
         headers={
             "content-type": "application/json",
             "user-agent": config.USER_AGENT,
             "authorization": f"Bearer {access_token}",
-            "x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev",
         },
         json={
             "model": MODEL_DEFAULT,
@@ -126,11 +125,11 @@ def main():
     print(f"  simulation: {json.dumps(simulation_data['llmGatewayToolPolicySimulation'])}")
 
     print("\nCalling the Responses API with require_approval: 'always'...")
-    always_result = call_responses_api(key["accessToken"], app_id, "always", server_label)
+    always_result = call_responses_api(key["accessToken"], "always", server_label)
     print(f"  [{always_result['outcome']}] {json.dumps(always_result)}")
 
     print("\nCalling again with require_approval: 'never'...")
-    never_result = call_responses_api(key["accessToken"], app_id, "never", server_label)
+    never_result = call_responses_api(key["accessToken"], "never", server_label)
     print(f"  [{never_result['outcome']}] {json.dumps(never_result)}")
 
     print(

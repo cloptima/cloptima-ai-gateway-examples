@@ -61,9 +61,6 @@ async function main() {
         'content-type': 'application/json',
         'user-agent': USER_AGENT,
         authorization: `Bearer ${accessToken}`,
-        'x-cloptima-team': 'Platform AI',
-        'x-cloptima-app': appId,
-        'x-cloptima-environment': 'production',
       },
       body: JSON.stringify({ model: 'vertex_ai/gemini-2.5-flash', messages: [{ role: 'user', content: prompt }] }),
     });

@@ -26,7 +26,6 @@ async function main() {
   const result = await callOpenAIStyle(client, {
     model: 'openai/gpt-4o',
     prompt: 'This call should be denied - non-Vertex provider.',
-    headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev' },
     label: 'provider-deny-probe',
   });
 

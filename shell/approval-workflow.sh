@@ -42,7 +42,7 @@ echo ""
 
 echo "Making one call under the current (unchanged) policy, to show normal traffic is unaffected by a pending request..."
 call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "In one sentence, confirm this call is running under the current, unmodified policy." \
-  "baseline-probe" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev"
+  "baseline-probe"
 
 echo ""
 echo "Requesting approval to raise dailyBudgetUsd from \$$CURRENT_DAILY_BUDGET_USD to \$$REQUESTED_DAILY_BUDGET_USD..."

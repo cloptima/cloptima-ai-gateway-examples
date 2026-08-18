@@ -31,7 +31,6 @@ def main():
     result = call_openai_style(
         client, "openai/gpt-4o",
         "This call should be denied - non-Vertex provider.",
-        {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev"},
         "provider-deny-probe",
     )
 

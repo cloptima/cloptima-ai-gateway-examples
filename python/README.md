@@ -28,9 +28,10 @@ Run any of these from the `python/` directory:
 | `python -m examples.rate_limit` | A realistic per-minute request cap tripping after several calls. |
 | `python -m examples.token_limit` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `python -m examples.budget_limit` | A small daily spend cap admitting several calls, then denying the rest. |
-| `python -m examples.agentic_runaway` | Retry/loop-iteration limits catching a simulated runaway agent loop. |
+| `python -m examples.agentic_runaway` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
 | `python -m examples.pii_guardrail` | A model generates fake PII live, then a guardrail-enforced key blocks it. |
 | `python -m examples.exact_semantic_cache` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
+| `python -m examples.conversation_prompt_caching` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `python -m examples.provider_deny` | A non-Vertex model request blocked by a Vertex-only policy. |
 | `python -m examples.metadata_deny` | A deliberately unscoped key with no attribution headers, blocked. |
 | `python -m examples.byok` | Bring your own provider credential and route it through Cloptima's governance layer (needs `PROVIDER_API_KEY` in `.env`). |

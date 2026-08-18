@@ -55,7 +55,6 @@ def main():
     baseline = call_openai_style(
         client, MODEL_DEFAULT,
         "In one sentence, confirm this call is running under the current, unmodified policy.",
-        {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev"},
         "baseline-probe",
     )
     print(f"  [{baseline['outcome']}] baseline-probe")

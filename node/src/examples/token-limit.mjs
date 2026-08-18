@@ -34,7 +34,6 @@ async function main() {
   const result = await callOpenAIStyle(client, {
     model: MODELS.default,
     prompt: 'Write a detailed 500-word essay about the history of cloud computing.',
-    headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev' },
     label: 'token-limit-probe',
   });
 

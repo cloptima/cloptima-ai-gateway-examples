@@ -32,7 +32,7 @@ echo "Bound. Calling the gateway..."
 
 call_messages "$ACCESS_TOKEN" "$MODEL_DEFAULT" \
   "In one sentence, confirm this call went through Cloptima's managed AI gateway." \
-  "quickstart-anthropic" "x-cloptima-team: Quickstart" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev"
+  "quickstart-anthropic"
 jq '.' "$RESP_BODY_FILE"
 
 echo ""

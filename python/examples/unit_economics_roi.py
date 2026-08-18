@@ -117,8 +117,8 @@ def main():
     for i, prompt in enumerate(support_prompts):
         result = call_openai_style(
             support_client, MODEL_DEFAULT, prompt,
+            f"support-ticket-{i + 1}",
             attribution_headers(
-                team_id="Support Automation", app_id=support_app_id, environment="prod",
                 business_transaction_type=COST_CENTER_TRANSACTION_TYPE,
                 business_transaction_id=f"{suffix}-support-{i}",
                 business_transaction_unit_count=1,
@@ -126,7 +126,6 @@ def main():
                 business_outcome_success=True,
                 business_value_cents=750,
             ),
-            f"support-ticket-{i + 1}",
         )
         if result["outcome"] == "allowed":
             support_success_count += 1
@@ -167,8 +166,8 @@ def main():
     for i, upsell in enumerate(upsells):
         result = call_openai_style(
             upsell_client, MODEL_DEFAULT, upsell["prompt"],
+            f"checkout-upsell-{i + 1}",
             attribution_headers(
-                team_id="Checkout Upsell", app_id=upsell_app_id, environment="prod",
                 business_transaction_type=PROFIT_CENTER_TRANSACTION_TYPE,
                 business_transaction_id=f"{suffix}-upsell-{i}",
                 business_transaction_unit_count=1,
@@ -176,7 +175,6 @@ def main():
                 business_outcome_success=True,
                 business_value_cents=round(upsell["accepted_value_usd"] * 100),
             ),
-            f"checkout-upsell-{i + 1}",
         )
         if result["outcome"] == "allowed":
             upsell_success_count += 1

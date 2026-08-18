@@ -14,6 +14,7 @@
     "agentic-runaway": "node src/examples/agentic-runaway.mjs",
     "pii-guardrail": "node src/examples/pii-guardrail.mjs",
     "exact-semantic-cache": "node src/examples/exact-semantic-cache.mjs",
+    "conversation-prompt-caching": "node src/examples/conversation-prompt-caching.mjs",
     "provider-deny": "node src/examples/provider-deny.mjs",
     "metadata-deny": "node src/examples/metadata-deny.mjs",
     "byok": "node src/examples/byok.mjs",

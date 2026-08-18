@@ -50,7 +50,6 @@ async function main() {
     prompt: 'Generate a short, entirely fictional customer support ticket transcript for a QA test. '
       + 'Include a clearly fake SSN in XXX-XX-XXXX format, a fake 16-digit credit card number, a fake email '
       + 'address, and a fake phone number - all obviously placeholder values, never real. Output only the ticket text.',
-    headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': generatorAppId, 'x-cloptima-environment': 'dev' },
     label: 'generate-fixture',
   });
   const generatedText = generation.text || '';
@@ -60,7 +59,6 @@ async function main() {
   const guarded = await callOpenAIStyle(guardedClient, {
     model: MODELS.default,
     prompt: `A customer submitted this support ticket. Draft a one-sentence acknowledgement reply.\n\n${generatedText}`,
-    headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': guardedAppId, 'x-cloptima-environment': 'dev' },
     label: 'pii-guardrail-probe',
   });
 

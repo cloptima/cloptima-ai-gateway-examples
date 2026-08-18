@@ -68,7 +68,7 @@ echo "Repeating one exact prompt 5x for exact-cache evidence (enforced immediate
 EXACT_PROMPT="Summarize, in one sentence, why cloud costs increased for a customer running more Kubernetes pods this month."
 for i in 1 2 3 4 5; do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "$EXACT_PROMPT" "exact-cache-$i" \
-    "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev" "x-cloptima-feature: exact_cache_probe"
+    "x-cloptima-feature: exact_cache_probe"
 done
 
 echo ""
@@ -80,7 +80,7 @@ SEMANTIC_PROMPTS=(
 )
 for i in "${!SEMANTIC_PROMPTS[@]}"; do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "${SEMANTIC_PROMPTS[$i]}" "semantic-cache-$((i + 1))" \
-    "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev" "x-cloptima-feature: semantic_cache_probe"
+    "x-cloptima-feature: semantic_cache_probe"
 done
 
 echo ""

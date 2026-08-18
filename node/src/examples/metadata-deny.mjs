@@ -38,7 +38,6 @@ async function main() {
   const result = await callOpenAIStyle(client, {
     model: MODELS.default,
     prompt: 'This call should be denied - the key is deliberately unscoped and no attribution metadata is sent.',
-    headers: {},
     label: 'metadata-deny-probe',
   });
 

@@ -67,9 +67,6 @@ async function main() {
       'user-agent': USER_AGENT,
       authorization: `Bearer ${key.accessToken}`,
       'x-cloptima-provider-credential-id': credentialId,
-      'x-cloptima-team': 'Platform AI',
-      'x-cloptima-app': appId,
-      'x-cloptima-environment': 'dev',
     },
     body: JSON.stringify({
       model: 'openai/gpt-4o-mini',

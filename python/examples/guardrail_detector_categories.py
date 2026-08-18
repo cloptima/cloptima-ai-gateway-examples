@@ -64,7 +64,6 @@ def main():
     for probe in PROBES:
         result = call_openai_style(
             baseline_client, MODEL_DEFAULT, probe["prompt"],
-            {"x-cloptima-team": "Platform AI", "x-cloptima-app": baseline_app_id, "x-cloptima-environment": "dev"},
             probe["label"],
         )
         results.append(result)

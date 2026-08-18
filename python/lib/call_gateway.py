@@ -14,12 +14,12 @@ from anthropic import APIStatusError as AnthropicAPIStatusError
 from openai import APIStatusError as OpenAIAPIStatusError
 
 
-def call_openai_style(client, model, prompt, headers, label):
+def call_openai_style(client, model, prompt, label, headers=None):
     try:
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            extra_headers=headers,
+            extra_headers=headers or {},
         )
         return {
             "label": label,
@@ -32,13 +32,13 @@ def call_openai_style(client, model, prompt, headers, label):
         return _error_outcome(label, err)
 
 
-def call_anthropic_style(client, model, prompt, headers, label):
+def call_anthropic_style(client, model, prompt, label, headers=None):
     try:
         response = client.messages.create(
             model=model,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
-            extra_headers=headers,
+            extra_headers=headers or {},
         )
         return {
             "label": label,

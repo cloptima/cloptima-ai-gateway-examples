@@ -58,7 +58,6 @@ async function main() {
     const result = await callOpenAIStyle(client, {
       model: MODELS.default,
       prompt: `Routing probe ${i + 1}. In one sentence, confirm this call went through.`,
-      headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev' },
       label: `routing-probe-${i + 1}`,
     });
     results.push(result);

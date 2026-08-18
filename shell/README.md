@@ -26,9 +26,10 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `./rate-limit.sh` | A realistic per-minute request cap tripping after several calls. |
 | `./token-limit.sh` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `./budget-limit.sh` | A small daily spend cap admitting several calls, then denying the rest. |
-| `./agentic-runaway.sh` | Retry/loop-iteration limits catching a simulated runaway agent loop. |
+| `./agentic-runaway.sh` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
 | `./pii-guardrail.sh` | A model generates fake PII live, then a guardrail-enforced key blocks it. |
 | `./exact-semantic-cache.sh` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
+| `./conversation-prompt-caching.sh` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `./provider-deny.sh` | A non-Vertex model request blocked by a Vertex-only policy. |
 | `./metadata-deny.sh` | A deliberately unscoped key with no attribution headers, blocked. |
 | `./byok.sh` | Bring your own provider credential and route it through Cloptima's governance layer (needs `PROVIDER_API_KEY` in `.env`). |

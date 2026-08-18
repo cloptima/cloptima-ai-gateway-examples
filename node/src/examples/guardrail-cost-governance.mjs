@@ -52,7 +52,6 @@ async function main() {
   const result = await callOpenAIStyle(client, {
     model: MODELS.default,
     prompt: 'In one sentence, confirm this call ran under a guardrail cost-governance policy.',
-    headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev' },
     label: 'cost-governance-probe',
   });
 

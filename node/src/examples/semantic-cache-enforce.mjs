@@ -71,7 +71,7 @@ async function main() {
   for (let i = 0; i < 5; i += 1) {
     const result = await callOpenAIStyle(client, {
       model: MODELS.default, prompt: exactPrompt,
-      headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev', 'x-cloptima-feature': 'exact_cache_probe' },
+      headers: { 'x-cloptima-feature': 'exact_cache_probe' },
       label: `exact-cache-${i + 1}`,
     });
     exactResults.push(result);
@@ -88,7 +88,7 @@ async function main() {
   for (const [i, prompt] of semanticPrompts.entries()) {
     const result = await callOpenAIStyle(client, {
       model: MODELS.default, prompt,
-      headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev', 'x-cloptima-feature': 'semantic_cache_probe' },
+      headers: { 'x-cloptima-feature': 'semantic_cache_probe' },
       label: `semantic-cache-${i + 1}`,
     });
     semanticResults.push(result);

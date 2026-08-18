@@ -37,7 +37,6 @@ async function main() {
     const result = await callOpenAIStyle(client, {
       model: MODELS.default,
       prompt: `Rate limit probe ${i + 1}. Reply with just "ok".`,
-      headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev' },
       label: `call-${i + 1}`,
     });
     results.push(result);

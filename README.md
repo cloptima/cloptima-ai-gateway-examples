@@ -50,7 +50,8 @@ These validate the platform's multi-identity approval workflows, cache enforceme
 
 ### Phase 3: Financial & ROI Analytics
 These validate cost-basis accounting and business return-on-investment telemetry.
-* **`exact-semantic-cache`**: Demonstrates cost savings from cached tokens.
+* **`exact-semantic-cache`**: Demonstrates cost savings from Cloptima's exact and semantic response cache.
+* **`conversation-prompt-caching`**: Demonstrates provider-side prompt prefix caching on a growing multi-turn conversation.
 * **`unit-economics-roi`**: Computes business profit-center and cost-center ROI.
 * **`contract-pricing`**: Compares retail costs vs commitment-tier negotiated contract rates.
 
@@ -80,9 +81,10 @@ Each directory has the same set of independent example scripts:
 | `rate-limit` | A realistic per-minute request cap tripping after several calls. |
 | `token-limit` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `budget-limit` | A small daily spend cap admitting several calls, then denying the rest. |
-| `agentic-runaway` | Retry/loop-iteration limits catching a simulated runaway agent loop. |
+| `agentic-runaway` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
 | `pii-guardrail` | A model generates fake PII live, then a guardrail-enforced key blocks it - not a hardcoded test string. |
 | `exact-semantic-cache` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
+| `conversation-prompt-caching` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `provider-deny` | A non-Vertex model request blocked by a Vertex-only policy. |
 | `metadata-deny` | A deliberately unscoped key with no attribution headers, blocked. |
 | `byok` | Bring your own provider credential and route it through Cloptima's governance layer. |

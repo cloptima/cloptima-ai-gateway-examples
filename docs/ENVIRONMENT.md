@@ -41,7 +41,7 @@ These ride as plain HTTP headers on every managed-gateway inference call (`/v1/a
 | `x-cloptima-agent-session-id` / `x-cloptima-agent-run-id` | Agent-aware governance - groups calls into a session/run for audit. |
 | `x-cloptima-parent-execution-id` | Links a sub-call back to a parent agent execution. |
 | `x-cloptima-tool-name` / `x-cloptima-tool-call-id` | Identifies which tool/sub-step within an agent run a call belongs to. |
-| `x-cloptima-loop-iteration` / `x-cloptima-retry-index` | Which iteration of a simulated agent loop/retry a call represents - what the `agentic-runaway` example increments to trip `maxLoopIterations`/`maxRetryCount`. |
+| `x-cloptima-loop-iteration` / `x-cloptima-retry-index` | Manual loop/retry iteration overrides for mock testing. In real tool-calling traffic, the gateway automatically derives loop depth and retry count from the conversation transcript in the request body (see `agentic-runaway`). |
 | `x-cloptima-actor-id` / `x-cloptima-actor-type` / `x-cloptima-developer-id` | Who or what triggered the call. |
 | `x-cloptima-trace-id` / `x-cloptima-request-id` | Correlation IDs for cross-system tracing. |
 

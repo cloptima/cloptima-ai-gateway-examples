@@ -54,7 +54,7 @@ echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Making a call that should 
 echo ""
 
 call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "In one sentence, confirm this call ran under a guardrail cost-governance policy." \
-  "cost-governance-probe" "x-cloptima-team: Platform AI" "x-cloptima-app: $APP_ID" "x-cloptima-environment: dev"
+  "cost-governance-probe"
 jq '.' "$RESP_BODY_FILE"
 
 echo ""

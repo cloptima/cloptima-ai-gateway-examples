@@ -89,7 +89,6 @@ SUPPORT_PROMPTS=(
 SUPPORT_SUCCESS_COUNT=0
 for i in "${!SUPPORT_PROMPTS[@]}"; do
   call_chat "$SUPPORT_ACCESS_TOKEN" "$MODEL_DEFAULT" "${SUPPORT_PROMPTS[$i]}" "support-ticket-$((i + 1))" \
-    "x-cloptima-team: Support Automation" "x-cloptima-app: $SUPPORT_APP_ID" "x-cloptima-environment: prod" \
     "x-cloptima-business-transaction-type: $COST_CENTER_TRANSACTION_TYPE" "x-cloptima-business-transaction-id: $SUFFIX-support-$i" \
     "x-cloptima-business-transaction-unit-count: 1" "x-cloptima-business-outcome-status: resolved" \
     "x-cloptima-business-outcome-success: true" \
@@ -128,7 +127,6 @@ for i in "${!UPSELL_PROMPTS[@]}"; do
   value="${UPSELL_VALUES_USD[$i]}"
   value_cents=$(jq -n --argjson v "$value" '($v * 100) | round')
   call_chat "$UPSELL_ACCESS_TOKEN" "$MODEL_DEFAULT" "${UPSELL_PROMPTS[$i]}" "checkout-upsell-$((i + 1))" \
-    "x-cloptima-team: Checkout Upsell" "x-cloptima-app: $UPSELL_APP_ID" "x-cloptima-environment: prod" \
     "x-cloptima-business-transaction-type: $PROFIT_CENTER_TRANSACTION_TYPE" "x-cloptima-business-transaction-id: $SUFFIX-upsell-$i" \
     "x-cloptima-business-transaction-unit-count: 1" "x-cloptima-business-outcome-status: accepted" \
     "x-cloptima-business-outcome-success: true" \

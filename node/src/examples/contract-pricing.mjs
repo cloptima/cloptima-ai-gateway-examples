@@ -14,7 +14,11 @@ import { MODELS } from '../lib/models.mjs';
 
 // vertex_ai/gemini-2.5-flash retail: $0.30 in / $2.50 out per million tokens
 // (Cloptima's default LLM pricing catalog). ~20% off both - a realistic
-// volume discount for a mid-size enterprise agreement.
+// volume discount for a mid-size enterprise agreement. No cached-token rate
+// is negotiated here - a real procurement conversation prices input and
+// output tokens, not a platform caching mechanism, so this leaves the cache
+// rate unset and lets it resolve proportionally from retail instead of
+// guessing a number.
 const PROVIDER = 'vertex_ai';
 const MODEL = MODELS.default.split('/').pop();
 const CONTRACT_INPUT_RATE = 0.24;
@@ -87,7 +91,6 @@ async function main() {
         model: MODEL,
         inputRatePerMillion: CONTRACT_INPUT_RATE,
         outputRatePerMillion: CONTRACT_OUTPUT_RATE,
-        cachedInputRatePerMillion: CONTRACT_INPUT_RATE,
         effectiveStart: now.toISOString(),
         effectiveEnd: effectiveEnd.toISOString(),
       }],
@@ -137,7 +140,6 @@ async function main() {
   for (const [i, prompt] of prompts.entries()) {
     const result = await callWithPropagationRetry(client, {
       model: MODELS.default, prompt,
-      headers: { 'x-cloptima-team': 'Finance', 'x-cloptima-app': appId, 'x-cloptima-environment': 'prod' },
       label: `contract-call-${i + 1}`,
     });
     console.log(`  [${result.outcome}] contract-call-${i + 1}`);

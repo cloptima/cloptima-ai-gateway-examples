@@ -62,7 +62,6 @@ def main():
     for i in range(3):
         result = call_openai_style(
             client, MODEL_DEFAULT, f"Routing probe {i + 1}. In one sentence, confirm this call went through.",
-            {"x-cloptima-team": "Platform AI", "x-cloptima-app": app_id, "x-cloptima-environment": "dev"},
             f"routing-probe-{i + 1}",
         )
         results.append(result)

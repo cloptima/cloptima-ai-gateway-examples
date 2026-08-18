@@ -11,7 +11,7 @@ The console is a normal email/password login at your product console URL (e.g. `
 | Tab | Path | What it shows | Populated by |
 | --- | --- | --- | --- |
 | Dashboard | `/` | Org-wide FinOps rollups, including realized cache savings and blended effective cost (retail vs. contracted). | `exact-semantic-cache`, `contract-pricing`, `guardrail-cost-governance` |
-| Explorer | `/llm/spend` | Per-request attributed spend, usage, latency, and cached-token counts. Filterable by app/team/model. | `quickstart-openai`, `quickstart-anthropic`, `multi-model`, `budget-limit`, `exact-semantic-cache`, `byok` |
+| Explorer | `/llm/spend` | Per-request attributed spend, usage, latency, and cached-token counts. Filterable by app/team/model. | `quickstart-openai`, `quickstart-anthropic`, `multi-model`, `budget-limit`, `exact-semantic-cache`, `conversation-prompt-caching`, `byok` |
 | Economics | `/llm/unit-economics` | Cost-per-unit, margin, and net-ROI, computed from real submitted traffic - a cost-center agent (ROI vs. a pre-LLM baseline) next to a profit-center agent (real booked revenue). | `unit-economics-roi` |
 | Recommendations | `/llm/recommendations` | Cost-optimization suggestions (model right-sizing, caching, guardrail tuning) computed from real usage history over time. Nothing here immediately after a single script run - it needs accumulated traffic. | Builds up from all traffic over time, not any one script |
 | Policies | `/llm/policies` | Every policy config created so far: limits, guardrails, cache modes. | Every example that calls `createLLMGatewayPolicy` |

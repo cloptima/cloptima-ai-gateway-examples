@@ -1,16 +1,15 @@
 // Maps demo-friendly field names to the x-cloptima-* attribution headers the
 // managed gateway reads (see docs/ENVIRONMENT.md for the full header table).
+// These affect only cost/ROI reporting, never which requests are allowed or
+// blocked - teamId/appId/environment are only meaningful here for a key that
+// wasn't already minted scoped to them; a key created with its own
+// teamId/appId/environment doesn't need them repeated per call.
 export function attributionHeaders({
   teamId,
   appId,
   environment,
   feature,
   workflowId,
-  agentSessionId,
-  agentRunId,
-  parentExecutionId,
-  toolName,
-  toolCallId,
   businessTransactionType,
   businessTransactionId,
   businessTransactionUnitCount,
@@ -24,11 +23,6 @@ export function attributionHeaders({
     'x-cloptima-environment': environment,
     'x-cloptima-feature': feature,
     'x-cloptima-workflow': workflowId,
-    'x-cloptima-agent-session-id': agentSessionId,
-    'x-cloptima-agent-run-id': agentRunId,
-    'x-cloptima-parent-execution-id': parentExecutionId,
-    'x-cloptima-tool-name': toolName,
-    'x-cloptima-tool-call-id': toolCallId,
     'x-cloptima-business-transaction-type': businessTransactionType,
     'x-cloptima-business-transaction-id': businessTransactionId,
     'x-cloptima-business-transaction-unit-count': businessTransactionUnitCount,

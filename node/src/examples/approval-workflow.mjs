@@ -43,7 +43,6 @@ async function main() {
   const baseline = await callOpenAIStyle(client, {
     model: MODELS.default,
     prompt: 'In one sentence, confirm this call is running under the current, unmodified policy.',
-    headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': appId, 'x-cloptima-environment': 'dev' },
     label: 'baseline-probe',
   });
   console.log(`  [${baseline.outcome}] baseline-probe`);

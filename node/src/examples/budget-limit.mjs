@@ -23,16 +23,13 @@ const MAX_TOKENS_PER_CALL = 100;
 // make this loop exhaust MAX_CALLS before ever seeing the 402.
 const MAX_CALLS = 60;
 
-async function callChat(virtualKey, { model, prompt, appId }) {
+async function callChat(virtualKey, { model, prompt }) {
   const response = await fetch(`${config.baseUrl}/v1/ai/chat/completions`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'user-agent': USER_AGENT,
       authorization: `Bearer ${virtualKey}`,
-      'x-cloptima-team': 'Platform AI',
-      'x-cloptima-app': appId,
-      'x-cloptima-environment': 'dev',
     },
     body: JSON.stringify({ model, max_tokens: MAX_TOKENS_PER_CALL, messages: [{ role: 'user', content: prompt }] }),
   });
@@ -62,7 +59,6 @@ async function main() {
     const { status, body } = await callChat(key.accessToken, {
       model: MODELS.default,
       prompt: `Budget probe ${i + 1}. Reply with just "ok".`,
-      appId,
     });
     results.push({ label: `call-${i + 1}`, status, body });
     console.log(`  [${status === 200 ? 'allowed' : 'blocked'}] call-${i + 1} status=${status}`);

@@ -59,7 +59,6 @@ async function main() {
   for (const probe of PROBES) {
     const result = await callOpenAIStyle(baselineClient, {
       model: MODELS.default, prompt: probe.prompt,
-      headers: { 'x-cloptima-team': 'Platform AI', 'x-cloptima-app': baselineAppId, 'x-cloptima-environment': 'dev' },
       label: probe.label,
     });
     results.push(result);
