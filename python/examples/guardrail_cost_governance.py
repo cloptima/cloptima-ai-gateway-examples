@@ -1,13 +1,13 @@
-"""Guardrail cost-governance: guardrailCostMode governs whether the gateway
-will run a heavier (and costlier) provider-backed detector scan per request,
-and guardrailCostExceededAction decides what happens when that scan's cost
-would exceed guardrailMaxCostPerRequestCents. Deliberately pins a tiny cost
-cap (mirrors budget_limit.py's "pin a small threshold to keep the knob
-meaningful" pattern) so cost-exceeded behavior triggers deterministically,
-then enables guardrailLightweightProfileEnabled so 'downgrade' has a cheaper
-profile to fall back to instead of failing closed. All cost-tuning fields are
-Enterprise-gated (llm_guardrail_enterprise), so this is wrapped in try/except
-to show that gate too on a non-Enterprise customer.
+"""Guardrail cost-governance: guardrailCostMode, guardrailMaxCostPerRequestCents,
+and guardrailCostExceededAction govern the cost of an optional heavier
+provider-backed guardrail scan (guardrailProviderIntegration: webhook /
+azure_content_safety / bedrock_guardrails) - downgrading to a lightweight
+profile, requiring approval, or blocking when that scan would cost too much.
+This example uses only the built-in pii/secret detectors, which run locally
+at zero cost, so it demonstrates the cost-tuning fields being accepted
+(requires the Enterprise guardrails plan) rather than the downgrade itself
+firing - see guardrail_detector_categories.py for configuring a
+provider-backed scan.
 Run standalone from python/:
     python -m examples.guardrail_cost_governance
 """
@@ -21,8 +21,9 @@ from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
 from lib.models import MODEL_DEFAULT
 
-# Illustrative, not a platform minimum. Deliberately tiny so any heavier
-# provider-backed scan exceeds it and the cost-exceeded action is exercised.
+# Illustrative, not a platform minimum. No provider-backed scan is configured
+# below, so this cap is never actually exercised - it only shows the field
+# being accepted.
 MAX_COST_PER_REQUEST_CENTS = 1
 
 
@@ -30,7 +31,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"guardrail-cost-governance-{suffix}"
 
-    print(f"Creating a policy with guardrailCostMode='enforce', a ${MAX_COST_PER_REQUEST_CENTS}-cent cap, and downgrade-to-lightweight on exceed...")
+    print(f"Creating a policy with guardrailCostMode='enforce', a ${MAX_COST_PER_REQUEST_CENTS}-cent cap, and guardrailCostExceededAction='downgrade'...")
     try:
         policy = create_policy({
             "name": f"guardrail-cost-governance-{suffix}",
@@ -46,12 +47,12 @@ def main():
         })
     except RuntimeError as err:
         print(f"  denied: {err}")
-        print("Expected (non-Enterprise customer): guardrail cost-tuning fields require the llm_guardrail_enterprise entitlement. Nothing further to demonstrate without it.")
+        print("Expected (non-Enterprise plan): guardrail cost-tuning fields require the Enterprise guardrails plan. Nothing further to demonstrate without it.")
         return
 
     key = create_virtual_key({"name": f"vk-guardrail-cost-governance-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print(f"Minted key {key['id']}, bound. Making a call that should trip the cost-exceeded downgrade...\n")
+    print(f"Minted key {key['id']}, bound. Making a call under this policy...\n")
 
     # 2. Your application code - the official OpenAI SDK, unchanged.
     client = openai_style_client(key["accessToken"], config.BASE_URL)
@@ -61,17 +62,18 @@ def main():
         "cost-governance-probe",
     )
 
-    # 3. What the gateway did. The cap downgrades the scan; it must not fail the
-    # customer's request.
+    # 3. What the gateway did. The cost cap only applies to a provider-backed
+    # scan; pii/secret detectors are local and free, so the call is served
+    # normally either way.
     print(f"[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
-    confirm_allowed(result, f"guardrailMaxCostPerRequestCents={MAX_COST_PER_REQUEST_CENTS} downgrade path")
+    confirm_allowed(result, "served under a guardrail cost-governance policy")
     print(
-        f"\nConfirmed: served - the {MAX_COST_PER_REQUEST_CENTS}-cent cap is exceeded by the full detector scan, so the "
-        "request is served via the cheaper guardrailLightweightProfileEnabled fallback rather than blocked outright "
-        "(guardrailCostExceededAction: 'downgrade'). Re-run with guardrailCostExceededAction: 'block' to see the deny "
-        "path instead, or 'require_approval' to route it through the LLMGatewayApproval governance queue."
+        f"\nConfirmed: served - guardrailMaxCostPerRequestCents={MAX_COST_PER_REQUEST_CENTS} was accepted by the policy. "
+        "With only local pii/secret detectors enabled, there's no provider-backed scan cost to cap here; add a "
+        "guardrailProviderIntegration (see guardrail_detector_categories.py) to see the downgrade/require_approval/block "
+        "action trigger."
     )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - the record shows the cost-exceeded downgrade decision; Dashboard tab ({config.CONSOLE['dashboard']}) surfaces guardrailCostUsd/guardrailAvoidedCostUsd.")
+    print(f"Evidence: Policies tab ({config.CONSOLE['policies']}) shows the saved guardrailCostMode/guardrailMaxCostPerRequestCents/guardrailCostExceededAction config.")
 
 
 if __name__ == "__main__":

@@ -1,13 +1,13 @@
-// Guardrail cost-governance: guardrailCostMode governs
-// whether the gateway will run a heavier (and costlier) provider-backed
-// detector scan per request, and guardrailCostExceededAction decides what
-// happens when that scan's cost would exceed guardrailMaxCostPerRequestCents.
-// Deliberately pins a tiny cost cap (mirrors budget-limit.mjs's "pin a small
-// threshold to keep the knob meaningful" pattern) so cost-exceeded behavior
-// triggers deterministically, then enables guardrailLightweightProfileEnabled
-// so 'downgrade' has a cheaper profile to fall back to instead of failing
-// closed. All cost-tuning fields are Enterprise-gated (llm_guardrail_enterprise),
-// so this is wrapped in try/catch to show that gate too on a non-Enterprise customer.
+// Guardrail cost-governance: guardrailCostMode, guardrailMaxCostPerRequestCents,
+// and guardrailCostExceededAction govern the cost of an optional heavier
+// provider-backed guardrail scan (guardrailProviderIntegration: webhook /
+// azure_content_safety / bedrock_guardrails) - downgrading to a lightweight
+// profile, requiring approval, or blocking when that scan would cost too much.
+// This example uses only the built-in pii/secret detectors, which run locally
+// at zero cost, so it demonstrates the cost-tuning fields being accepted
+// (requires the Enterprise guardrails plan) rather than the downgrade itself
+// firing - see guardrail-detector-categories.mjs for configuring a
+// provider-backed scan.
 // Run standalone:
 //   node src/examples/guardrail-cost-governance.mjs
 import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
@@ -17,15 +17,16 @@ import { callOpenAIStyle } from '../lib/callGateway.mjs';
 import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
-// Illustrative, not a platform minimum. Deliberately tiny so any heavier
-// provider-backed scan exceeds it and the cost-exceeded action is exercised.
+// Illustrative, not a platform minimum. No provider-backed scan is configured
+// below, so this cap is never actually exercised - it only shows the field
+// being accepted.
 const MAX_COST_PER_REQUEST_CENTS = 1;
 
 async function main() {
   const suffix = runSuffix();
   const appId = `guardrail-cost-governance-${suffix}`;
 
-  console.log(`Creating a policy with guardrailCostMode='enforce', a $${MAX_COST_PER_REQUEST_CENTS}-cent cap, and downgrade-to-lightweight on exceed...`);
+  console.log(`Creating a policy with guardrailCostMode='enforce', a $${MAX_COST_PER_REQUEST_CENTS}-cent cap, and guardrailCostExceededAction='downgrade'...`);
   let policy;
   try {
     policy = await createPolicy({
@@ -42,12 +43,12 @@ async function main() {
     });
   } catch (err) {
     console.log(`  denied: ${err.message}`);
-    console.log('Expected (non-Enterprise customer): guardrail cost-tuning fields require the llm_guardrail_enterprise entitlement. Nothing further to demonstrate without it.');
+    console.log('Expected (non-Enterprise plan): guardrail cost-tuning fields require the Enterprise guardrails plan. Nothing further to demonstrate without it.');
     return;
   }
   const key = await createVirtualKey({ name: `vk-guardrail-cost-governance-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
   await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log(`Minted key ${key.id}, bound. Making a call that should trip the cost-exceeded downgrade...\n`);
+  console.log(`Minted key ${key.id}, bound. Making a call under this policy...\n`);
 
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
   const result = await callOpenAIStyle(client, {
@@ -56,17 +57,18 @@ async function main() {
     label: 'cost-governance-probe',
   });
 
-  // 3. What the gateway did. The cap downgrades the scan; it must not fail the
-  // customer's request.
+  // 3. What the gateway did. The cost cap only applies to a provider-backed
+  // scan; pii/secret detectors are local and free, so the call is served
+  // normally either way.
   console.log(`[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
-  confirmAllowed(result, `guardrailMaxCostPerRequestCents=${MAX_COST_PER_REQUEST_CENTS} downgrade path`);
+  confirmAllowed(result, 'served under a guardrail cost-governance policy');
   console.log(
-    `\nConfirmed: served - the ${MAX_COST_PER_REQUEST_CENTS}-cent cap is exceeded by the full detector scan, so the `
-    + "request is served via the cheaper guardrailLightweightProfileEnabled fallback rather than blocked outright "
-    + "(guardrailCostExceededAction: 'downgrade'). Re-run with guardrailCostExceededAction: 'block' to see the deny "
-    + "path instead, or 'require_approval' to route it through the LLMGatewayApproval governance queue.",
+    `\nConfirmed: served - guardrailMaxCostPerRequestCents=${MAX_COST_PER_REQUEST_CENTS} was accepted by the policy. `
+    + "With only local pii/secret detectors enabled, there's no provider-backed scan cost to cap here; add a "
+    + "guardrailProviderIntegration (see guardrail-detector-categories.mjs) to see the downgrade/require_approval/block "
+    + 'action trigger.',
   );
-  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - the record shows the cost-exceeded downgrade decision; Dashboard tab (${CONSOLE.dashboard}) surfaces guardrailCostUsd/guardrailAvoidedCostUsd.`);
+  console.log(`Evidence: Policies tab (${CONSOLE.policies}) shows the saved guardrailCostMode/guardrailMaxCostPerRequestCents/guardrailCostExceededAction config.`);
 }
 
 main().catch((err) => {
