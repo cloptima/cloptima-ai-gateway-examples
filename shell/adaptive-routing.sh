@@ -29,6 +29,7 @@ MODEL_STRONG="vertex_ai/gemini-2.5-pro"
 SUFFIX="$(run_suffix)"
 APP_ID="adaptive-routing-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating a policy with adaptive routing in observe mode across cheap/balanced/strong candidate tiers..."
 POLICY=$(create_policy "$(jq -n \
   --arg name "adaptive-routing-$SUFFIX" \
@@ -50,13 +51,16 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Sending a few calls at the 'balanced' tier model..."
 echo ""
 
+# 2. Your application code.
 for i in 1 2 3; do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "Routing probe $i. In one sentence, confirm this call went through." \
     "routing-probe-$i"
+  # 3. What the gateway did. Observe mode must never change what gets served.
+  confirm_allowed "routing-probe-$i under observe-mode adaptive routing"
 done
 
 echo ""
-echo "Expected: all 3 calls are served exactly as requested (observe mode never changes actual routing) - the"
+echo "Confirmed: all 3 calls served exactly as requested (observe mode never changes actual routing) - the"
 echo "router logs, per call, which candidate it would have picked under this certified tier set. That decision"
 echo "log isn't in this script's own output; it's a console-side evidence trail."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - shows the logged routing-decision trail per call; Policies tab ($CONSOLE_POLICIES) shows the metadata.routing.adaptive config, including the candidate tiers above."

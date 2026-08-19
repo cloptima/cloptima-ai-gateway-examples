@@ -16,6 +16,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_allowed
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key, graphql, list_llm_gateway_approvals
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -67,6 +68,7 @@ def main():
     else:
         print("  no matching applied entry found.")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     client = openai_style_client(key["accessToken"], config.BASE_URL)
 
     print("\nRepeating one exact prompt 5x for exact-cache evidence (enforced immediately, no approval needed)...")
@@ -97,8 +99,12 @@ def main():
         semantic_results.append(result)
         print(f"  [{result['outcome']}] semantic-cache-{i + 1}")
 
+    # 3. What the gateway did. Enforce-mode caching must serve, never fail, a call.
+    for result in semantic_results:
+        confirm_allowed(result, f"{result['label']} served under enforce-mode semantic caching")
+
     print(
-        "\nExpected: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant "
+        "\nConfirmed: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant "
         "semantic-cache enforcement was live from the start, with no separate review step needed."
     )
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows the applied semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab ({config.CONSOLE['policies']}) shows the policy's cache config.")

@@ -19,6 +19,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS, OTHER_GEMINI_MODELS } from '../lib/models.mjs';
 
 const CANDIDATE_MODELS = {
@@ -52,6 +53,7 @@ async function main() {
   await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
   console.log(`Minted key ${key.id}, bound. Sending a few calls at the 'balanced' tier model...\n`);
 
+  // 2. Your application code - the official OpenAI SDK, unchanged.
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
   const results = [];
   for (let i = 0; i < 3; i += 1) {
@@ -64,8 +66,12 @@ async function main() {
     console.log(`  [${result.outcome}] routing-probe-${i + 1}`);
   }
 
+  // 3. What the gateway did. Observe mode must never change what gets served.
+  for (const result of results) {
+    confirmAllowed(result, `${result.label} under observe-mode adaptive routing`);
+  }
   console.log(
-    '\nExpected: all 3 calls are served exactly as requested (observe mode never changes actual routing) - the '
+    `\nConfirmed: all ${results.length} calls served exactly as requested (observe mode never changes actual routing) - the `
     + "router logs, per call, which candidate it would have picked under this certified tier set. That decision "
     + "log isn't in this script's own output; it's a console-side evidence trail.",
   );

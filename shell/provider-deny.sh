@@ -13,6 +13,7 @@ MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
 SUFFIX="$(run_suffix)"
 APP_ID="provider-deny-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating a Vertex-only policy..."
 POLICY=$(create_policy "$(jq -n --arg name "provider-deny-$SUFFIX" --arg model "$MODEL_DEFAULT" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model]}')")
@@ -26,10 +27,15 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Requesting a non-Vertex model through it..."
 echo ""
 
+# 2. Your application code.
 call_chat "$ACCESS_TOKEN" "openai/gpt-4o" "This call should be denied - non-Vertex provider." \
   "provider-deny-probe"
 jq '.' "$RESP_BODY_FILE"
 
+# 3. What the gateway did. confirm_blocked stops the script if the policy
+# above did not deny the disallowed provider.
+confirm_blocked "allowedProviders=[vertex_ai]" 403 "provider"
+
 echo ""
-echo "Expected: blocked (403) - the policy only allows vertex_ai, so a non-Vertex model is denied before provider egress."
+echo "Confirmed: blocked ($LAST_HTTP_CODE) - the policy only allows vertex_ai, so a non-Vertex model is denied before provider egress."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$APP_ID\" for the provider-scope block record."

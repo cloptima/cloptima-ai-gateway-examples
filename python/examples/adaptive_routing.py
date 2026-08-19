@@ -20,6 +20,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_allowed
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -36,6 +37,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"adaptive-routing-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print("Creating a policy with adaptive routing in observe mode across cheap/balanced/strong candidate tiers...")
     policy = create_policy({
         "name": f"adaptive-routing-{suffix}",
@@ -57,6 +59,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound. Sending a few calls at the 'balanced' tier model...\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     client = openai_style_client(key["accessToken"], config.BASE_URL)
     results = []
     for i in range(3):
@@ -67,8 +70,11 @@ def main():
         results.append(result)
         print(f"  [{result['outcome']}] routing-probe-{i + 1}")
 
+    # 3. What the gateway did. Observe mode must never change what gets served.
+    for result in results:
+        confirm_allowed(result, f"{result['label']} under observe-mode adaptive routing")
     print(
-        "\nExpected: all 3 calls are served exactly as requested (observe mode never changes actual routing) - the "
+        f"\nConfirmed: all {len(results)} calls served exactly as requested (observe mode never changes actual routing) - the "
         "router logs, per call, which candidate it would have picked under this certified tier set. That decision "
         "log isn't in this script's own output; it's a console-side evidence trail."
     )

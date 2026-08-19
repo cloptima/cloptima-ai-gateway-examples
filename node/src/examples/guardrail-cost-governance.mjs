@@ -14,6 +14,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 // Illustrative, not a platform minimum. Deliberately tiny so any heavier
@@ -55,9 +56,12 @@ async function main() {
     label: 'cost-governance-probe',
   });
 
+  // 3. What the gateway did. The cap downgrades the scan; it must not fail the
+  // customer's request.
   console.log(`[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
+  confirmAllowed(result, `guardrailMaxCostPerRequestCents=${MAX_COST_PER_REQUEST_CENTS} downgrade path`);
   console.log(
-    `\nExpected: allowed - the ${MAX_COST_PER_REQUEST_CENTS}-cent cap is exceeded by the full detector scan, so the `
+    `\nConfirmed: served - the ${MAX_COST_PER_REQUEST_CENTS}-cent cap is exceeded by the full detector scan, so the `
     + "request is served via the cheaper guardrailLightweightProfileEnabled fallback rather than blocked outright "
     + "(guardrailCostExceededAction: 'downgrade'). Re-run with guardrailCostExceededAction: 'block' to see the deny "
     + "path instead, or 'require_approval' to route it through the LLMGatewayApproval governance queue.",

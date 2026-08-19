@@ -19,6 +19,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmBlocked } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 // Canonical, publicly-known test phrases for their respective detector
@@ -65,8 +66,12 @@ async function main() {
     console.log(`  [${result.outcome}] ${probe.label}`);
   }
 
+  // What the gateway did. Every baseline detector category must block.
+  for (const result of results) {
+    confirmBlocked(result, `baseline detector probe ${result.label}`, { status: 403 });
+  }
   console.log(
-    '\nExpected (baseline): all three probes blocked (403) before provider egress, each naming the detector that '
+    '\nConfirmed (baseline): all three probes blocked (403) before provider egress, each naming the detector that '
     + 'fired (prompt_injection / jailbreak / toxicity).',
   );
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${baselineAppId}" for the three block records; Policies tab (${CONSOLE.policies}) shows guardrailDetectorsEnabled.`);

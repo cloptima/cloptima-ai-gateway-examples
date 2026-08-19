@@ -23,6 +23,7 @@ import time
 import requests
 
 from lib import config
+from lib.confirm import confirm_equals
 from lib.gateway_admin import graphql, create_policy, create_virtual_key, create_binding
 
 
@@ -208,17 +209,19 @@ def main():
 
     print("\nAttempting to activate the version (expected to be blocked - the evaluation run failed the quality gate)...")
     try:
-        graphql(
+        activated = graphql(
             """mutation Activate($templateId: ID!, $versionId: ID!) {
               activateLLMPromptVersion(templateId: $templateId, versionId: $versionId) { id status }
             }""",
             {"templateId": template["id"], "versionId": version["id"]},
         )
-        print("  activated (unexpected)")
+        raise RuntimeError(f"quality gate did not hold: activation succeeded while the release approval was still pending ({json.dumps(activated)})")
     except RuntimeError as err:
+        if "quality gate did not hold" in str(err):
+            raise
         print(f"  blocked: {err}")
         print(
-            "  Expected: HTTP 409 - production activation is blocked because the release approval remained pending\n"
+            "  Confirmed: production activation is blocked because the release approval remained pending\n"
             "  (gate failed due to the latest evaluation run scoring 50% vs required 80% threshold)."
         )
 
@@ -267,8 +270,9 @@ def main():
         {"templateId": template["id"], "versionId": version["id"]},
     )["activateLLMPromptVersion"]
     print(f"  activated: {json.dumps(activated_pass)}")
+    confirm_equals(activated_pass.get("status") if activated_pass else None, "active", "passing evaluation run with applyImmediately: true should activate")
     print(
-        "Expected: this activation succeeds - applyImmediately: true auto-approved the gate because the latest\n"
+        "Confirmed: this activation succeeds - applyImmediately: true auto-approved the gate because the latest\n"
         "evaluation run met the 80% quality threshold."
     )
     print(f"\nEvidence: Audit tab ({config.CONSOLE['audit']}) shows both release approvals - the first still pending (failed gate), the second already decided; Policies tab ({config.CONSOLE['policies']}) shows this version now active.")

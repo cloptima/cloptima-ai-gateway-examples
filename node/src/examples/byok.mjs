@@ -7,6 +7,7 @@
 //   node src/examples/byok.mjs
 import { config, runSuffix, USER_AGENT, CONSOLE } from '../lib/config.mjs';
 import { graphql, createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
+import { confirmEquals } from '../lib/confirm.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -77,8 +78,9 @@ async function main() {
   console.log(`Gateway response status=${response.status}`);
   console.log(JSON.stringify(body, null, 2));
 
+  confirmEquals(response.status, 200, 'call routed through the bring-your-own-key provider credential');
   console.log(
-    '\nThis call is billed to your own provider account, not Cloptima\'s managed-credit wallet.',
+    `\nConfirmed: served (${response.status}) and billed to your own provider account, not Cloptima's managed-credit wallet.`,
   );
   console.log(`Evidence: Credentials tab (${CONSOLE.credentials}) shows the provider credential just created; Audit tab (${CONSOLE.audit}) and Explorer tab (${CONSOLE.spend}) confirm attribution/telemetry are still captured even though spend is BYOK.`);
 }

@@ -134,10 +134,11 @@ ACTIVATED_FAIL=$(graphql \
 ACTIVATE_STATUS=$?
 set -e
 if [ "$ACTIVATE_STATUS" -eq 0 ]; then
-  echo "  activated: $(echo "$ACTIVATED_FAIL" | jq -c '.activateLLMPromptVersion') (unexpected)"
+  echo "quality gate did not hold: activation succeeded while the release approval was still pending ($(echo "$ACTIVATED_FAIL" | jq -c '.activateLLMPromptVersion'))" >&2
+  exit 1
 else
   echo "  blocked: $(cat "$ACTIVATE_ERROR_FILE")"
-  echo "  Expected: HTTP 409 - production activation is blocked because the release approval remained pending"
+  echo "  Confirmed: production activation is blocked because the release approval remained pending"
   echo "  (gate failed due to the latest evaluation run scoring 50% vs required 80% threshold)."
 fi
 rm -f "$ACTIVATE_ERROR_FILE"
@@ -167,7 +168,9 @@ ACTIVATED_PASS=$(graphql \
   'mutation Activate($templateId: ID!, $versionId: ID!) { activateLLMPromptVersion(templateId: $templateId, versionId: $versionId) { id status } }' \
   "$(jq -n --arg templateId "$TEMPLATE_ID" --arg versionId "$VERSION_ID" '{templateId: $templateId, versionId: $versionId}')")
 echo "  activated: $(echo "$ACTIVATED_PASS" | jq -c '.activateLLMPromptVersion')"
-echo "Expected: this activation succeeds - applyImmediately: true auto-approved the gate because the latest"
+PASS_STATUS=$(echo "$ACTIVATED_PASS" | jq -r '.activateLLMPromptVersion.status // empty')
+confirm_equals "$PASS_STATUS" "active" "passing evaluation run with applyImmediately: true should activate"
+echo "Confirmed: this activation succeeds - applyImmediately: true auto-approved the gate because the latest"
 echo "evaluation run met the 80% quality threshold."
 echo ""
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) shows both release approvals - the first still pending (failed gate), the second already decided; Policies tab ($CONSOLE_POLICIES) shows this version now active."

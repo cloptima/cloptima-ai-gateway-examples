@@ -40,6 +40,7 @@ CHECK_STATUS_TOOL='{
   }
 }'
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 LOOP_APP_ID="agentic-loop-$SUFFIX"
 echo "Creating policy with maxLoopIterations=$MAX_LOOP_ITERATIONS..."
 LOOP_POLICY=$(create_policy "$(jq -n --arg name "agentic-loop-$SUFFIX" --arg model "$MODEL_DEFAULT" \
@@ -55,6 +56,7 @@ create_binding "$(jq -n --arg policyId "$LOOP_POLICY_ID" --arg appId "$LOOP_APP_
 echo "Minted key $(echo "$LOOP_KEY" | jq -r '.id'), bound."
 echo ""
 
+# 2. Your application code.
 LOOP_ITERATIONS_TO_SIMULATE=$((MAX_LOOP_ITERATIONS + 2))
 echo "Driving a real tool-calling loop for $LOOP_ITERATIONS_TO_SIMULATE turns..."
 echo ""
@@ -67,6 +69,8 @@ for i in $(seq 0 $((LOOP_ITERATIONS_TO_SIMULATE - 1))); do
     -H "Authorization: Bearer $LOOP_ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
     -d "$BODY")
   OUTCOME=$(outcome_for_status "$HTTP_CODE")
+  LAST_HTTP_CODE="$HTTP_CODE"
+  LAST_OUTCOME="$OUTCOME"
   echo "  [$OUTCOME] turn $i (http $HTTP_CODE)"
   if [ "$HTTP_CODE" -ne 200 ]; then
     break
@@ -81,8 +85,11 @@ for i in $(seq 0 $((LOOP_ITERATIONS_TO_SIMULATE - 1))); do
     ]')
 done
 
+# 3. What the gateway did.
+confirm_blocked "maxLoopIterations=$MAX_LOOP_ITERATIONS" 403
+
 echo ""
-echo "Expected: turns 0-$MAX_LOOP_ITERATIONS allowed, turn $((MAX_LOOP_ITERATIONS + 1)) onward blocked"
+echo "Confirmed: turns 0-$MAX_LOOP_ITERATIONS served, turn $((MAX_LOOP_ITERATIONS + 1)) blocked"
 echo "(\"exceeds the active Cloptima agent limits\") - counted from the tool-call turns already present in the"
 echo "conversation, not any client-supplied count."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$LOOP_APP_ID\" for the blocked turn."
@@ -122,11 +129,15 @@ for i in $(seq 0 $((RETRY_ITERATIONS_TO_SIMULATE - 1))); do
     -H "Authorization: Bearer $RETRY_ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
     -d "$BODY")
   OUTCOME=$(outcome_for_status "$HTTP_CODE")
+  LAST_HTTP_CODE="$HTTP_CODE"
+  LAST_OUTCOME="$OUTCOME"
   echo "  [$OUTCOME] attempt $i (http $HTTP_CODE)"
 done
 
+confirm_blocked "maxRetryCount=$MAX_RETRY_COUNT" 403
+
 echo ""
-echo "Expected: attempts 0-$MAX_RETRY_COUNT allowed, attempt $((MAX_RETRY_COUNT + 1)) onward blocked - counted"
+echo "Confirmed: attempts 0-$MAX_RETRY_COUNT served, attempt $((MAX_RETRY_COUNT + 1)) blocked - counted"
 echo "per tool_call_id, so a different call id gets its own independent count."
 
 OTHER_BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson tool "$CHECK_STATUS_TOOL" \
@@ -142,6 +153,8 @@ OTHER_BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson tool "$CHECK_STATUS_TO
 OTHER_HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
   -H "Authorization: Bearer $RETRY_ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
   -d "$OTHER_BODY")
-OTHER_OUTCOME=$(outcome_for_status "$OTHER_HTTP_CODE")
-echo "  [$OTHER_OUTCOME] a different tool_call_id, first attempt (http $OTHER_HTTP_CODE)"
+LAST_HTTP_CODE="$OTHER_HTTP_CODE"
+LAST_OUTCOME=$(outcome_for_status "$OTHER_HTTP_CODE")
+echo "  [$LAST_OUTCOME] a different tool_call_id, first attempt (http $OTHER_HTTP_CODE)"
+confirm_allowed "a different tool_call_id starts its own retry count"
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$RETRY_APP_ID\" for the blocked attempt."

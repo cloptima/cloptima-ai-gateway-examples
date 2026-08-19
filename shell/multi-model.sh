@@ -27,6 +27,7 @@ MODELS=(
 SUFFIX="$(run_suffix)"
 APP_ID="multi-model-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating policy allowlisting ${#MODELS[@]} Vertex AI Gemini model variants..."
 MODELS_JSON=$(printf '%s\n' "${MODELS[@]}" | jq -R . | jq -s .)
 POLICY=$(create_policy "$(jq -n --arg name "multi-model-$SUFFIX" --argjson models "$MODELS_JSON" \
@@ -42,12 +43,17 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Calling each model once..."
 echo ""
 
+# 2. Your application code.
 for model in "${MODELS[@]}"; do
   call_chat "$ACCESS_TOKEN" "$model" "In one short sentence, name the model you are." \
     "$model"
   jq -c '{status: (.error // .choices[0].message.content // .)}' "$RESP_BODY_FILE" 2>/dev/null || cat "$RESP_BODY_FILE"
+  # 3. What the gateway did. Every model listed in allowedModels must be served.
+  confirm_allowed "allowedModels includes $model"
 done
 
+echo ""
+echo "Confirmed: all ${#MODELS[@]} allowlisted models served under one policy."
 echo ""
 echo "If any model above came back blocked with a pricing-related reason rather than a policy/model-allow reason,"
 echo "that means the model is real and allowlisted but the gateway pricing catalog needs a cost entry for it -"

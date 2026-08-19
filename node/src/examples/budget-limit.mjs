@@ -12,6 +12,7 @@
 //   node src/examples/budget-limit.mjs
 import { config, runSuffix, USER_AGENT, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
+import { confirmCapStopped } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 // Illustrative, not a platform minimum. Bounds: dailyBudgetUsd accepts 0-10,000,000.
@@ -65,8 +66,11 @@ async function main() {
     if (status !== 200) break;
   }
 
-  const allowedCount = results.filter((r) => r.status === 200).length;
-  console.log(`\n${allowedCount} calls allowed before the $${DAILY_BUDGET_USD}/day policy budget returned 402.`);
+  // 3. What the gateway did. confirmCapStopped stops the script if the budget
+  // never denied a call, so a silent regression cannot print as a success.
+  const outcomes = results.map((r) => ({ ...r, outcome: r.status === 200 ? 'allowed' : 'blocked', reason: r.body }));
+  const { allowedCount, blocked } = confirmCapStopped(outcomes, `dailyBudgetUsd=${DAILY_BUDGET_USD}`, { status: 402 });
+  console.log(`\n${allowedCount} calls served, then ${blocked.label} returned ${blocked.status} once the $${DAILY_BUDGET_USD}/day policy budget was exhausted.`);
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${appId}" for the 402 block record; Explorer tab (${CONSOLE.spend}) shows the spend accumulated right up to the cap.`);
   console.log(JSON.stringify(results, null, 2));
 }

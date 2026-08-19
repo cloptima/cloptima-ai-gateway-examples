@@ -13,6 +13,7 @@ MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
 SUFFIX="$(run_suffix)"
 APP_ID="quickstart-anthropic-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating policy allowing $MODEL_DEFAULT on the managed Vertex AI provider..."
 POLICY=$(create_policy "$(jq -n --arg name "quickstart-anthropic-$SUFFIX" --arg model "$MODEL_DEFAULT" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model]}')")
@@ -30,10 +31,14 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
   '{policyId: $policyId, teamId: "Quickstart", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
 echo "Bound. Calling the gateway..."
 
+# 2. Your application code.
 call_messages "$ACCESS_TOKEN" "$MODEL_DEFAULT" \
   "In one sentence, confirm this call went through Cloptima's managed AI gateway." \
   "quickstart-anthropic"
+
+# 3. What the gateway did.
 jq '.' "$RESP_BODY_FILE"
+confirm_allowed "quickstart call through a bound virtual key"
 
 echo ""
 echo "Evidence: Explorer tab ($CONSOLE_SPEND) - find this request_id to see attributed spend and usage."

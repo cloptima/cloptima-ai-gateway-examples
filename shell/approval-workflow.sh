@@ -67,8 +67,10 @@ PENDING=$(list_llm_gateway_approvals "pending" 50)
 OURS=$(echo "$PENDING" | jq -c --arg id "$APPROVAL_ID" '.[] | select(.id == $id)')
 echo "  this request, pending: $OURS"
 
+confirm_equals "$(echo "$OURS" | jq -r '.status // empty')" "pending" "a budget increase without applyImmediately must wait for a second identity"
+
 echo ""
-echo "Expected: the request sits in 'pending' status and the policy's dailyBudgetUsd stays at"
+echo "Confirmed: the request sits in 'pending' status and the policy's dailyBudgetUsd stays at"
 echo "\$$CURRENT_DAILY_BUDGET_USD until a second identity reviews and approves it via reviewLLMGatewayApproval -"
 echo "not something this script does on its own behalf."
 
@@ -88,7 +90,9 @@ IMMEDIATE_APPROVAL=$(create_llm_gateway_approval "$(jq -n \
     applyImmediately: true}')")
 echo "  result: $IMMEDIATE_APPROVAL"
 
+confirm_equals "$(echo "$IMMEDIATE_APPROVAL" | jq -r '.status // empty')" "applied" "applyImmediately by a qualifying identity must apply in the same call"
+
 echo ""
-echo "Expected: status is 'applied', not 'pending' - since this key already qualifies to decide this itself,"
+echo "Confirmed: status is 'applied', not 'pending' - since this key already qualifies to decide this itself,"
 echo "the request is approved and applied in this same call, with no separate review step."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - shows the first request still pending and this second one already applied; Policies tab ($CONSOLE_POLICIES) shows the policy's budget reflecting the applied change."

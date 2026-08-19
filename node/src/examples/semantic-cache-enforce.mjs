@@ -15,6 +15,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { graphql, createPolicy, createVirtualKey, createBinding, listLLMGatewayApprovals } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 const ROUTE = '/v1/ai/chat/completions';
@@ -95,8 +96,12 @@ async function main() {
     console.log(`  [${result.outcome}] semantic-cache-${i + 1}`);
   }
 
+  // 3. What the gateway did. Enforce-mode caching must serve, never fail, a call.
+  for (const result of semanticResults) {
+    confirmAllowed(result, `${result.label} served under enforce-mode semantic caching`);
+  }
   console.log(
-    '\nExpected: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant '
+    '\nConfirmed: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant '
     + 'semantic-cache enforcement was live from the start, with no separate review step needed.',
   );
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - shows the applied semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab (${CONSOLE.policies}) shows the policy's cache config.`);

@@ -29,6 +29,7 @@
 //   node src/examples/mcp-tool-governance.mjs
 import { config, runSuffix, CONSOLE, USER_AGENT } from '../lib/config.mjs';
 import { graphql, createPolicy, createVirtualKey, createBinding, listLLMGatewayApprovals } from '../lib/gatewayAdmin.mjs';
+import { confirmBlocked, confirmEquals } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 async function callResponsesApi(accessToken, requireApproval, serverLabel) {
@@ -129,8 +130,21 @@ async function main() {
   const neverResult = await callResponsesApi(key.accessToken, 'never', serverLabel);
   console.log(`  [${neverResult.outcome}] ${JSON.stringify(neverResult)}`);
 
+  confirmBlocked(alwaysResult, "tool server status 'disabled'", { status: 403 });
+  confirmBlocked(neverResult, "tool server status 'disabled'", { status: 403 });
+  // The claim below is that 'never' carries an extra, independent violation.
+  // Assert exactly that, so the sentence cannot outlive the behaviour.
+  const alwaysViolations = alwaysResult.body?.violations ?? [];
+  const neverViolations = neverResult.body?.violations ?? [];
+  confirmEquals(alwaysViolations.includes('tool_server_disabled'), true, "'always' should be blocked by tool_server_disabled");
+  confirmEquals(neverViolations.includes('tool_server_disabled'), true, "'never' should carry tool_server_disabled too");
+  confirmEquals(
+    neverViolations.includes('tool_server_auto_approval_disabled') && !alwaysViolations.includes('tool_server_auto_approval_disabled'),
+    true,
+    "tool_server_auto_approval_disabled should apply to 'never' only",
+  );
   console.log(
-    "\nExpected: both calls are blocked (403) because the tool server above is still 'disabled' pending review - "
+    "\nConfirmed: both calls are blocked (403) because the tool server above is still 'disabled' pending review - "
     + "'always' is blocked by tool_server_disabled alone. 'never' carries that SAME violation plus an additional "
     + 'tool_server_auto_approval_disabled entry the \'always\' call does not get - proving the never-auto-approve '
     + 'rule is enforced as its own, independent check that would still apply even after this tool server is '
@@ -155,8 +169,9 @@ async function main() {
     },
   );
   console.log(`  tool server ${toolServer2.id} - status: ${toolServer2.status}`);
+  confirmEquals(toolServer2.status, 'active', "applyImmediately: true should register the tool server as 'active'");
   console.log(
-    "Expected: status 'active' right away - applyImmediately: true meant this registration was approved and "
+    "Confirmed: status 'active' right away - applyImmediately: true meant this registration was approved and "
     + 'activated in this same call, with no separate review step and no tool_server_disabled block.',
   );
 }

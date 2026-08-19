@@ -16,6 +16,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 async function main() {
@@ -35,6 +36,7 @@ async function main() {
   await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
   console.log(`Minted key ${key.id}, bound.\n`);
 
+  // 2. Your application code - the official OpenAI SDK, unchanged.
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
 
   console.log('Repeating one exact prompt 5x for exact-cache evidence...');
@@ -67,6 +69,12 @@ async function main() {
     console.log(`  [${result.outcome}] semantic-cache-${i + 1}`);
   }
 
+  // 3. What the gateway did. Caching is a cost optimisation, never a reason for
+  // a call to fail - every repeat must still come back served.
+  for (const result of [...exactResults, ...semanticResults]) {
+    confirmAllowed(result, `${result.label} served through the cache-enabled policy`);
+  }
+  console.log(`\nConfirmed: all ${exactResults.length + semanticResults.length} calls served.`);
   console.log(
     '\nCache hit/miss decisions show up in the console, not in this script\'s own output - compare latency and ' +
     'usage across the repeats above, then check the console for the authoritative hit/miss trail.',

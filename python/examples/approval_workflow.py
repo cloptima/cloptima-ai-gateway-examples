@@ -19,6 +19,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_equals
 from lib.gateway_admin import (
     create_binding,
     create_llm_gateway_approval,
@@ -82,8 +83,9 @@ def main():
     ours = next((a for a in pending if a["id"] == approval["id"]), None)
     print(f"  this request, pending: {json.dumps(ours)}")
 
+    confirm_equals(ours.get("status") if ours else None, "pending", "a budget increase without applyImmediately must wait for a second identity")
     print(
-        f"\nExpected: the request sits in 'pending' status and the policy's dailyBudgetUsd stays at "
+        f"\nConfirmed: the request sits in 'pending' status and the policy's dailyBudgetUsd stays at "
         f"${CURRENT_DAILY_BUDGET_USD} until a second identity reviews and approves it via "
         "reviewLLMGatewayApproval - not something this script does on its own behalf."
     )
@@ -103,8 +105,9 @@ def main():
     })
     print(f"  result: {json.dumps(immediate_approval)}")
 
+    confirm_equals(immediate_approval.get("status"), "applied", "applyImmediately by a qualifying identity must apply in the same call")
     print(
-        "\nExpected: status is 'applied', not 'pending' - since this key already qualifies to decide this itself, "
+        "\nConfirmed: status is 'applied', not 'pending' - since this key already qualifies to decide this itself, "
         "the request is approved and applied in this same call, with no separate review step."
     )
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows the first request still pending and this second one already applied; Policies tab ({config.CONSOLE['policies']}) shows the policy's budget reflecting the applied change.")

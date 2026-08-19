@@ -52,3 +52,13 @@ Each script prints illustrative policy limits it's using and says plainly that t
 - Attribution and agent-context metadata ride as `x-cloptima-*` request headers (see `../docs/ENVIRONMENT.md`).
 - There is no client-side cache toggle - exact/semantic caching is entirely policy-driven server-side (see `../docs/CACHE_AND_POLICY.md`).
 - Policy/key/binding creation goes through the public `createLLMGatewayPolicy` / `createLLMGatewayKey` / `createLLMGatewayPolicyBinding` GraphQL mutations - see `src/lib/gatewayAdmin.mjs`.
+
+## How each script is laid out
+
+Every example follows the same three steps, so you can read any of them top to bottom:
+
+1. **Cloptima setup** - create the policy, virtual key, and binding. Together these are the entire contract; nothing later asks the gateway to enforce anything.
+2. **Your application code** - the official `openai` or `@anthropic-ai/sdk` client, called exactly as you would call it without Cloptima.
+3. **What the gateway did** - print the outcome, then confirm it against what the policy in step 1 configured (`src/lib/confirm.mjs`).
+
+That last step is a real check, not narration: if a limit, guardrail, or scope did not hold, the script exits non-zero with a message naming the control that failed, so a run can never report a governance guarantee it did not get.

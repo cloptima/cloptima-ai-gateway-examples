@@ -17,6 +17,7 @@ load_env
 MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
 SUFFIX="$(run_suffix)"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating a policy that requires team_id/app_id/environment metadata..."
 POLICY=$(create_policy "$(jq -n --arg name "metadata-deny-$SUFFIX" --arg model "$MODEL_DEFAULT" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model],
@@ -37,12 +38,17 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg principalId "$KEY_ID" 
 echo "Minted key $KEY_ID, bound. Calling with zero attribution headers..."
 echo ""
 
+# 2. Your application code.
 call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" \
   "This call should be denied - the key is deliberately unscoped and no attribution metadata is sent." \
   "metadata-deny-probe"
 jq '.' "$RESP_BODY_FILE"
 
+# 3. What the gateway did. confirm_blocked stops the script if the call was
+# somehow permitted without attribution.
+confirm_blocked "unscoped key with zero attribution metadata" 400 "attribution"
+
 echo ""
-echo "Expected: 400 - \"Managed AI requests require Cloptima team and app attribution\" - a more basic gate"
+echo "Confirmed: 400 - \"Managed AI requests require Cloptima team and app attribution\" - a more basic gate"
 echo "than the policy engine's own required_metadata_keys check, but a genuine block either way."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by key $KEY_ID for the missing-attribution block record."

@@ -20,6 +20,7 @@ import json
 import requests
 
 from lib import config
+from lib.confirm import confirm_equals
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.models import MODEL_DEFAULT
 
@@ -139,6 +140,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"conv-cache-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print("Creating a policy with no cache config at all (default off) - any cached-token "
           "evidence below comes from the provider's own prompt caching, not a Cloptima "
           "cache feature...")
@@ -151,6 +153,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound.\n")
 
+    # 2. Your application code.
     print("Sending a growing conversation - each turn resends the full history (system "
           "context + every prior exchange) plus one new short question, the same shape a "
           "coding assistant produces...\n")
@@ -170,6 +173,11 @@ def main():
             reply = result["body"]["choices"][0]["message"]["content"]
         messages.append({"role": "assistant", "content": reply})
 
+    # 3. What the gateway did.
+    for result in results:
+        confirm_equals(result["status"], 200, f"{result['label']} served through the prompt-caching policy")
+    cached_per_turn = [((r["usage"] or {}).get("prompt_tokens_details") or {}).get("cached_tokens", 0) for r in results]
+    print(f"\nConfirmed: all {len(results)} turns served. cached_tokens per turn: {', '.join(str(c) for c in cached_per_turn)}")
     print(
         "\nTurn 1 has nothing to reuse yet, so cached_tokens should read 0 there. From turn 2 "
         "onward, the repeated system context plus prior turns should start showing up as "

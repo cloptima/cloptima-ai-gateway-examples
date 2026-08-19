@@ -17,6 +17,7 @@ import json
 import requests
 
 from lib import config
+from lib.confirm import confirm_cap_stopped
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.models import MODEL_DEFAULT
 
@@ -52,6 +53,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"budget-limit-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print(f"Creating hard_strict policy with dailyBudgetUsd=${DAILY_BUDGET_USD}...")
     policy = create_policy({
         "name": f"budget-limit-{suffix}",
@@ -63,6 +65,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound. Firing calls (max {MAX_CALLS}) until the budget denies...\n")
 
+    # 2. Your application code.
     results = []
     for i in range(MAX_CALLS):
         result = call_chat(key["accessToken"], MODEL_DEFAULT, f'Budget probe {i + 1}. Reply with just "ok".')
@@ -71,8 +74,13 @@ def main():
         if result["status"] != 200:
             break
 
-    allowed_count = sum(1 for r in results if r["status"] == 200)
-    print(f"\n{allowed_count} calls allowed before the ${DAILY_BUDGET_USD}/day policy budget returned 402.")
+    # 3. What the gateway did. confirm_cap_stopped stops the script if the budget
+    # never denied a call, so a silent regression cannot print as a success.
+    outcomes = [{"label": r["label"], "status": r["status"], "outcome": "allowed" if r["status"] == 200 else "blocked", "reason": r["body"]} for r in results]
+    cap_info = confirm_cap_stopped(outcomes, f"dailyBudgetUsd={DAILY_BUDGET_USD}", status=402)
+    allowed_count = cap_info["allowed_count"]
+    blocked = cap_info["blocked"]
+    print(f"\n{allowed_count} calls served, then {blocked['label']} returned {blocked['status']} once the ${DAILY_BUDGET_USD}/day policy budget was exhausted.")
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by app \"{app_id}\" for the 402 block record; Explorer tab ({config.CONSOLE['spend']}) shows the spend accumulated right up to the cap.")
     print(json.dumps(results, indent=2, default=str))
 

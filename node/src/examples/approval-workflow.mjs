@@ -18,6 +18,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { graphql, createPolicy, createVirtualKey, createBinding, createLLMGatewayApproval, listLLMGatewayApprovals } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmEquals } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 const CURRENT_DAILY_BUDGET_USD = 5;
@@ -70,8 +71,9 @@ async function main() {
   const ours = pending.find((a) => a.id === approval.id);
   console.log(`  this request, pending: ${JSON.stringify(ours)}`);
 
+  confirmEquals(ours?.status, 'pending', 'a budget increase without applyImmediately must wait for a second identity');
   console.log(
-    '\nExpected: the request sits in \'pending\' status and the policy\'s dailyBudgetUsd stays at '
+    '\nConfirmed: the request sits in \'pending\' status and the policy\'s dailyBudgetUsd stays at '
     + `$${CURRENT_DAILY_BUDGET_USD} until a second identity reviews and approves it via reviewLLMGatewayApproval - `
     + `not something this script does on its own behalf.`,
   );
@@ -91,8 +93,9 @@ async function main() {
   });
   console.log(`  result: ${JSON.stringify(immediateApproval)}`);
 
+  confirmEquals(immediateApproval?.status, 'applied', 'applyImmediately by a qualifying identity must apply in the same call');
   console.log(
-    '\nExpected: status is \'applied\', not \'pending\' - since this key already qualifies to decide this itself, '
+    '\nConfirmed: status is \'applied\', not \'pending\' - since this key already qualifies to decide this itself, '
     + 'the request is approved and applied in this same call, with no separate review step.',
   );
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - shows the first request still pending and this second one already applied; Policies tab (${CONSOLE.policies}) shows the policy's budget reflecting the applied change.`);

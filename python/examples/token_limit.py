@@ -8,6 +8,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_blocked
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -22,6 +23,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"token-limit-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print(f"Creating policy with maxOutputTokens={MAX_OUTPUT_TOKENS}...")
     policy = create_policy({
         "name": f"token-limit-{suffix}",
@@ -33,6 +35,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound. Requesting a long response the policy should reject...\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     client = openai_style_client(key["accessToken"], config.BASE_URL)
     result = call_openai_style(
         client, MODEL_DEFAULT,
@@ -40,10 +43,13 @@ def main():
         "token-limit-probe",
     )
 
+    # 3. What the gateway did. confirm_blocked stops the script if the policy
+    # above was not held, so a silent regression cannot print as a success.
     print(f"[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
+    confirm_blocked(result, f"maxOutputTokens={MAX_OUTPUT_TOKENS}", status=403, violation="output limit")
     print(
-        f"\nExpected: blocked pre-flight (403) since the request's default max_tokens exceeds {MAX_OUTPUT_TOKENS}, "
-        "with both the requested and allowed values named in the error."
+        f"\nConfirmed: blocked pre-flight ({result.get('status')}) - the request's default max_tokens exceeds {MAX_OUTPUT_TOKENS}, "
+        "and the error names both the requested and the allowed value."
     )
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - the block record names both the requested and allowed token values; Policies tab ({config.CONSOLE['policies']}) shows the maxOutputTokens config.")
 

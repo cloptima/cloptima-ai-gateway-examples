@@ -29,6 +29,7 @@ MAX_CALLS=60
 SUFFIX="$(run_suffix)"
 APP_ID="budget-limit-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating hard_strict policy with dailyBudgetUsd=\$$DAILY_BUDGET_USD..."
 POLICY=$(create_policy "$(jq -n --arg name "budget-limit-$SUFFIX" --arg model "$MODEL_DEFAULT" --argjson budget "$DAILY_BUDGET_USD" \
   '{name: $name, mode: "enforce", budgetMode: "hard_strict", allowedProviders: ["vertex_ai"], allowedModels: [$model], dailyBudgetUsd: $budget}')")
@@ -42,6 +43,7 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Firing calls (max $MAX_CALLS) until the budget denies..."
 echo ""
 
+# 2. Your application code.
 ALLOWED_COUNT=0
 for i in $(seq 1 "$MAX_CALLS"); do
   BODY=$(jq -n --arg model "$MODEL_DEFAULT" --arg prompt "Budget probe $i. Reply with just \"ok\"." --argjson maxTokens "$MAX_TOKENS_PER_CALL" \
@@ -54,10 +56,17 @@ for i in $(seq 1 "$MAX_CALLS"); do
     ALLOWED_COUNT=$((ALLOWED_COUNT + 1))
   else
     echo "  [blocked] call-$i (http $HTTP_CODE)"
+    LAST_HTTP_CODE="$HTTP_CODE"
+    LAST_OUTCOME="blocked"
     break
   fi
 done
 
+# 3. What the gateway did. confirm_cap_stopped stops the script if the budget
+# never denied a call, so a silent regression cannot print as a success.
+confirm_cap_stopped "$ALLOWED_COUNT" "" "dailyBudgetUsd=$DAILY_BUDGET_USD"
+confirm_blocked "dailyBudgetUsd=$DAILY_BUDGET_USD" 402
+
 echo ""
-echo "$ALLOWED_COUNT calls allowed before the \$$DAILY_BUDGET_USD/day policy budget returned 402."
+echo "$ALLOWED_COUNT calls served, then call-$((ALLOWED_COUNT + 1)) returned $HTTP_CODE once the \$$DAILY_BUDGET_USD/day policy budget was exhausted."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$APP_ID\" for the 402 block record; Explorer tab ($CONSOLE_SPEND) shows the spend accumulated right up to the cap."

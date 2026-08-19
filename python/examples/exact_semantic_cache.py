@@ -17,6 +17,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_allowed
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -27,6 +28,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"cache-demo-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print("Creating policy with exact cache (enforce, full retention) and semantic cache (observe)...")
     policy = create_policy({
         "name": f"exact-semantic-cache-{suffix}",
@@ -40,6 +42,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound.\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     client = openai_style_client(key["accessToken"], config.BASE_URL)
 
     print("Repeating one exact prompt 5x for exact-cache evidence...")
@@ -70,6 +73,11 @@ def main():
         semantic_results.append(result)
         print(f"  [{result['outcome']}] semantic-cache-{i + 1}")
 
+    # 3. What the gateway did. Caching is a cost optimisation, never a reason for
+    # a call to fail - every repeat must still come back served.
+    for result in exact_results + semantic_results:
+        confirm_allowed(result, f"{result['label']} served through the cache-enabled policy")
+    print(f"\nConfirmed: all {len(exact_results) + len(semantic_results)} calls served.")
     print(
         "\nCache hit/miss decisions show up in the console, not in this script's own output - compare latency and "
         "usage across the repeats above, then check the console for the authoritative hit/miss trail."

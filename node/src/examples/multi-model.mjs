@@ -19,6 +19,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS, OTHER_GEMINI_MODELS } from '../lib/models.mjs';
 
 async function main() {
@@ -40,6 +41,7 @@ async function main() {
   await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
   console.log(`Minted key ${key.id}, bound. Calling each model once...\n`);
 
+  // 2. Your application code - the official OpenAI SDK, unchanged.
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
   const results = [];
   for (const model of models) {
@@ -55,6 +57,11 @@ async function main() {
     console.log(`  [${result.outcome}] ${model} - ${note}`);
   }
 
+  // 3. What the gateway did. Every model listed in allowedModels must be served.
+  for (const result of results) {
+    confirmAllowed(result, `allowedModels includes ${result.label}`);
+  }
+  console.log(`\nConfirmed: all ${results.length} allowlisted models served under one policy.`);
   console.log(
     '\nIf any model above came back blocked with a pricing-related reason rather than a policy/model-allow ' +
     'reason, that means the model is real and allowlisted but the gateway pricing catalog needs a cost entry ' +

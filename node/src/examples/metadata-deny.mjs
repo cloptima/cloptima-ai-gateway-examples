@@ -11,11 +11,13 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmBlocked } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 async function main() {
   const suffix = runSuffix();
 
+  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
   console.log('Creating a policy that requires team_id/app_id/environment metadata...');
   const policy = await createPolicy({
     name: `metadata-deny-${suffix}`,
@@ -34,6 +36,7 @@ async function main() {
   await createBinding({ policyId: policy.id, principalId: key.id, actorType: 'service', priority: 5, acknowledgeOverlap: true });
   console.log(`Minted key ${key.id}, bound. Calling with zero attribution headers...\n`);
 
+  // 2. Your application code - the official OpenAI SDK, unchanged.
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
   const result = await callOpenAIStyle(client, {
     model: MODELS.default,
@@ -41,9 +44,12 @@ async function main() {
     label: 'metadata-deny-probe',
   });
 
+  // 3. What the gateway did. confirmBlocked stops the script if the policy
+  // above was not held, so a silent regression cannot print as a success.
   console.log(`[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
+  confirmBlocked(result, 'attribution required before policy resolution', { status: 400, violation: 'attribution' });
   console.log(
-    '\nExpected: 400 - "Managed AI requests require Cloptima team and app attribution" - a more basic gate ' +
+    `\nConfirmed: ${result.status} - "Managed AI requests require Cloptima team and app attribution" - a more basic gate ` +
     'than the policy engine\'s own required_metadata_keys check, but a genuine block either way.',
   );
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by key ${key.id} for the missing-attribution block record.`);

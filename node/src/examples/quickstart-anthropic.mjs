@@ -6,12 +6,14 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { anthropicStyleClient } from '../lib/gatewayClients.mjs';
 import { callAnthropicStyle } from '../lib/callGateway.mjs';
+import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 async function main() {
   const suffix = runSuffix();
   const appId = `quickstart-anthropic-${suffix}`;
 
+  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
   console.log(`Creating policy allowing ${MODELS.default} on the managed Vertex AI provider...`);
   const policy = await createPolicy({
     name: `quickstart-anthropic-${suffix}`,
@@ -32,6 +34,7 @@ async function main() {
   await createBinding({ policyId: policy.id, teamId: 'Quickstart', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
   console.log('Bound. Calling the gateway with the official Anthropic SDK...');
 
+  // 2. Your application code - the official Anthropic SDK, unchanged.
   const client = anthropicStyleClient(key.accessToken, config.baseUrl);
   const result = await callAnthropicStyle(client, {
     model: MODELS.default,
@@ -39,7 +42,9 @@ async function main() {
     label: 'quickstart-anthropic',
   });
 
+  // 3. What the gateway did.
   console.log(`\n[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
+  confirmAllowed(result, 'quickstart call through a bound virtual key');
   console.log(`\nEvidence: Explorer tab (${CONSOLE.spend}) - find this request_id to see attributed spend and usage.`);
 }
 

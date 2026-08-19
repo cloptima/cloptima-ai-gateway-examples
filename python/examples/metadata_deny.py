@@ -12,6 +12,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_blocked
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -21,6 +22,7 @@ from lib.models import MODEL_DEFAULT
 def main():
     suffix = config.run_suffix()
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print("Creating a policy that requires team_id/app_id/environment metadata...")
     policy = create_policy({
         "name": f"metadata-deny-{suffix}",
@@ -39,6 +41,7 @@ def main():
     create_binding({"policyId": policy["id"], "principalId": key["id"], "actorType": "service", "priority": 5, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound. Calling with zero attribution headers...\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     client = openai_style_client(key["accessToken"], config.BASE_URL)
     result = call_openai_style(
         client, MODEL_DEFAULT,
@@ -46,9 +49,12 @@ def main():
         "metadata-deny-probe",
     )
 
+    # 3. What the gateway did. confirm_blocked stops the script if the policy
+    # above was not held, so a silent regression cannot print as a success.
     print(f"[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
+    confirm_blocked(result, "attribution required before policy resolution", status=400, violation="attribution")
     print(
-        '\nExpected: 400 - "Managed AI requests require Cloptima team and app attribution" - a more basic gate '
+        f"\nConfirmed: {result.get('status')} - \"Managed AI requests require Cloptima team and app attribution\" - a more basic gate "
         "than the policy engine's own required_metadata_keys check, but a genuine block either way."
     )
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by key {key['id']} for the missing-attribution block record.")

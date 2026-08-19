@@ -5,12 +5,14 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 async function main() {
   const suffix = runSuffix();
   const appId = `quickstart-openai-${suffix}`;
 
+  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
   console.log(`Creating policy allowing ${MODELS.default} on the managed Vertex AI provider...`);
   const policy = await createPolicy({
     name: `quickstart-openai-${suffix}`,
@@ -31,6 +33,7 @@ async function main() {
   await createBinding({ policyId: policy.id, teamId: 'Quickstart', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
   console.log('Bound. Calling the gateway with the official OpenAI SDK...');
 
+  // 2. Your application code - the official OpenAI SDK, unchanged.
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
   const result = await callOpenAIStyle(client, {
     model: MODELS.default,
@@ -38,7 +41,9 @@ async function main() {
     label: 'quickstart-openai',
   });
 
+  // 3. What the gateway did.
   console.log(`\n[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
+  confirmAllowed(result, 'quickstart call through a bound virtual key');
   console.log(`\nEvidence: Explorer tab (${CONSOLE.spend}) - find this request_id to see attributed spend and usage.`);
 }
 

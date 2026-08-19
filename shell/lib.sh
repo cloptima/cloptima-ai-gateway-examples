@@ -168,3 +168,82 @@ call_messages() {
   LAST_OUTCOME=$(outcome_for_status "$LAST_HTTP_CODE")
   echo "  [$LAST_OUTCOME] $label (http $LAST_HTTP_CODE)"
 }
+
+# The policy, binding, and virtual key an example creates are the entire
+# contract. These confirm the gateway honoured that contract and stop the
+# script with a specific message when it did not, so a run where enforcement
+# quietly stopped working can never print as a success.
+#
+# Nothing here asks the gateway to enforce anything. No header, flag, or
+# counter is sent - the only input is the configuration registered above.
+
+confirm_allowed() {
+  local what="$1"
+  if [ "$LAST_OUTCOME" != "allowed" ]; then
+    echo "ERROR: $what: expected this call to be served, got outcome=$LAST_OUTCOME status=$LAST_HTTP_CODE body=$(cat "$RESP_BODY_FILE")" >&2
+    exit 1
+  fi
+}
+
+confirm_blocked() {
+  local what="$1"
+  local expected_status="${2:-}"
+  local violation="${3:-}"
+  if [ "$LAST_OUTCOME" != "blocked" ]; then
+    echo "ERROR: $what: expected the gateway to block this call, got outcome=$LAST_OUTCOME status=$LAST_HTTP_CODE body=$(cat "$RESP_BODY_FILE")" >&2
+    exit 1
+  fi
+  if [ -n "$expected_status" ] && [ "$LAST_HTTP_CODE" -ne "$expected_status" ]; then
+    echo "ERROR: $what: expected HTTP $expected_status, got outcome=$LAST_OUTCOME status=$LAST_HTTP_CODE body=$(cat "$RESP_BODY_FILE")" >&2
+    exit 1
+  fi
+  if [ -n "$violation" ]; then
+    local body
+    body="$(cat "$RESP_BODY_FILE" 2>/dev/null || true)"
+    if ! echo "$body" | grep -qi "$violation"; then
+      echo "ERROR: $what: expected the block to name \"$violation\", got outcome=$LAST_OUTCOME status=$LAST_HTTP_CODE body=$body" >&2
+      exit 1
+    fi
+  fi
+}
+
+confirm_cap_stopped() {
+  local allowed_count="$1"
+  local expected_allowed="${2:-}"
+  local cap_name="$3"
+  if [ "$LAST_OUTCOME" != "blocked" ]; then
+    echo "ERROR: cap did not hold: all calls succeeded; $cap_name was expected to stop the burst" >&2
+    exit 1
+  fi
+  if [ -n "$expected_allowed" ] && [ "$allowed_count" -ne "$expected_allowed" ]; then
+    echo "ERROR: $cap_name: expected $expected_allowed calls allowed before cap, got $allowed_count" >&2
+    exit 1
+  fi
+}
+
+confirm_equals() {
+  local actual="$1"
+  local expected="$2"
+  local what="$3"
+  if [ "$actual" != "$expected" ]; then
+    echo "ERROR: $what: expected '$expected', got '$actual'" >&2
+    exit 1
+  fi
+}
+
+# Rate limits are evaluated per calendar minute, so a burst that straddles a
+# minute boundary is split across two windows and can stay under the cap in
+# both. Waiting for a fresh window keeps the demonstration deterministic
+# instead of dependent on what time it happens to run.
+start_of_calendar_minute() {
+  local calls="${1:-5}"
+  local sec
+  sec=$(date -u +%S | sed 's/^0*//')
+  sec="${sec:-0}"
+  local seconds_left=$((60 - sec))
+  if [ "$seconds_left" -ge "$((calls + 5))" ]; then
+    return 0
+  fi
+  echo "Waiting ${seconds_left}s for the next calendar minute so the whole burst lands in one window..."
+  sleep "$seconds_left"
+}

@@ -216,13 +216,20 @@ async function main() {
       }`,
       { templateId: template.id, versionId: version.id },
     );
-    console.log(`  activated: ${JSON.stringify(activated)} (unexpected)`);
-  } catch (err) {
-    console.log(`  blocked: ${err.message}`);
-    console.log(
-      '  Expected: HTTP 409 - production activation is blocked because the release approval remained pending\n'
-      + '  (gate failed due to the latest evaluation run scoring 50% vs required 80% threshold).',
+    throw new Error(
+      'quality gate did not hold: activation succeeded while the release approval was still pending '
+      + `(${JSON.stringify(activated)})`,
     );
+  } catch (err) {
+    if (!/quality gate did not hold/.test(err.message)) {
+      console.log(`  blocked: ${err.message}`);
+      console.log(
+        '  Confirmed: production activation is blocked because the release approval remained pending\n'
+        + '  (gate failed due to the latest evaluation run scoring 50% vs required 80% threshold).',
+      );
+    } else {
+      throw err;
+    }
   }
 
   console.log('\nRunning deterministic evaluation run with passing candidate output config...');

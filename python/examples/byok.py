@@ -13,6 +13,7 @@ import os
 import requests
 
 from lib import config
+from lib.confirm import confirm_equals
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key, graphql
 
 
@@ -28,6 +29,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"byok-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print("Creating a provider credential (BYOK)...")
     created = graphql(
         """mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
@@ -67,6 +69,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound. Making one managed-gateway call routed through the BYOK credential...\n")
 
+    # 2. Your application code.
     response = requests.post(
         f"{config.BASE_URL}/v1/ai/chat/completions",
         headers={
@@ -84,7 +87,9 @@ def main():
     print(f"Gateway response status={response.status_code}")
     print(json.dumps(response.json(), indent=2))
 
-    print("\nThis call is billed to your own provider account, not Cloptima's managed-credit wallet.")
+    # 3. What the gateway did.
+    confirm_equals(response.status_code, 200, "call routed through the bring-your-own-key provider credential")
+    print(f"\nConfirmed: served ({response.status_code}) and billed to your own provider account, not Cloptima's managed-credit wallet.")
     print(f"Evidence: Credentials tab ({config.CONSOLE['credentials']}) shows the provider credential just created; Audit tab ({config.CONSOLE['audit']}) and Explorer tab ({config.CONSOLE['spend']}) confirm attribution/telemetry are still captured even though spend is BYOK.")
 
 

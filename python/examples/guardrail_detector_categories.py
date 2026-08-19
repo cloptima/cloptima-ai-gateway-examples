@@ -20,6 +20,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_blocked
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -47,6 +48,7 @@ def main():
     suffix = config.run_suffix()
     baseline_app_id = f"guardrail-categories-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print("Creating a policy with prompt_injection, jailbreak, and toxicity detectors enabled (no special entitlement required)...")
     baseline_policy = create_policy({
         "name": f"guardrail-categories-{suffix}",
@@ -59,6 +61,7 @@ def main():
     create_binding({"policyId": baseline_policy["id"], "teamId": "Platform AI", "appId": baseline_app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {baseline_key['id']}, bound. Sending one probe per category...\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     baseline_client = openai_style_client(baseline_key["accessToken"], config.BASE_URL)
     results = []
     for probe in PROBES:
@@ -69,8 +72,11 @@ def main():
         results.append(result)
         print(f"  [{result['outcome']}] {probe['label']}")
 
+    # 3. What the gateway did. Every baseline detector category must block.
+    for result in results:
+        confirm_blocked(result, f"baseline detector probe {result['label']}", status=403)
     print(
-        "\nExpected (baseline): all three probes blocked (403) before provider egress, each naming the detector that "
+        "\nConfirmed (baseline): all three probes blocked (403) before provider egress, each naming the detector that "
         "fired (prompt_injection / jailbreak / toxicity)."
     )
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by app \"{baseline_app_id}\" for the three block records; Policies tab ({config.CONSOLE['policies']}) shows guardrailDetectorsEnabled.")

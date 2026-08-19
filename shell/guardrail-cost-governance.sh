@@ -25,6 +25,7 @@ MAX_COST_PER_REQUEST_CENTS=1
 SUFFIX="$(run_suffix)"
 APP_ID="guardrail-cost-governance-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating a policy with guardrailCostMode='enforce', a \$$MAX_COST_PER_REQUEST_CENTS-cent cap, and downgrade-to-lightweight on exceed..."
 POLICY_ERROR_FILE="$(mktemp)"
 set +e
@@ -53,12 +54,17 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Making a call that should trip the cost-exceeded downgrade..."
 echo ""
 
+# 2. Your application code.
 call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "In one sentence, confirm this call ran under a guardrail cost-governance policy." \
   "cost-governance-probe"
 jq '.' "$RESP_BODY_FILE"
 
+# 3. What the gateway did. The cap downgrades the scan; it must not fail the
+# customer's request.
+confirm_allowed "guardrailMaxCostPerRequestCents=$MAX_COST_PER_REQUEST_CENTS downgrade path"
+
 echo ""
-echo "Expected: allowed - the $MAX_COST_PER_REQUEST_CENTS-cent cap is exceeded by the full detector scan, so the"
+echo "Confirmed: served - the $MAX_COST_PER_REQUEST_CENTS-cent cap is exceeded by the full detector scan, so the"
 echo "request is served via the cheaper guardrailLightweightProfileEnabled fallback rather than blocked outright"
 echo "(guardrailCostExceededAction: 'downgrade'). Re-run with guardrailCostExceededAction: 'block' to see the deny"
 echo "path instead, or 'require_approval' to route it through the LLMGatewayApproval governance queue."

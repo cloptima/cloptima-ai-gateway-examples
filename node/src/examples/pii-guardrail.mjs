@@ -13,6 +13,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmAllowed, confirmBlocked, confirmEquals } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 async function main() {
@@ -62,9 +63,14 @@ async function main() {
     label: 'pii-guardrail-probe',
   });
 
+  // 3. What the gateway did. The unguarded key must have produced real ticket
+  // text, and the guarded key must refuse to forward it.
   console.log(`[${guarded.outcome}] ${JSON.stringify(guarded, null, 2)}`);
+  confirmAllowed(generation, 'unguarded generator key');
+  confirmEquals(generatedText.trim().length > 0, true, 'unguarded generator key should return ticket text to feed the guarded call');
+  confirmBlocked(guarded, 'guardrailDetectorsEnabled=[pii, secret]', { status: 403 });
   console.log(
-    '\nExpected: blocked before provider egress (403, detector_pii) - prompt-side PII is denied, not silently ' +
+    `\nConfirmed: blocked before provider egress (${guarded.status}) - prompt-side PII is denied, not silently ` +
     'admitted. guardrailOutputAction: redact applies to generated output, not an incoming sensitive prompt.',
   );
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - the block record names the pii/secret detector that fired; Policies tab (${CONSOLE.policies}) shows the guardrailDetectorsEnabled config.`);

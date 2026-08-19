@@ -21,6 +21,7 @@ SUFFIX="$(run_suffix)"
 GENERATOR_APP_ID="pii-guardrail-generator-$SUFFIX"
 GUARDED_APP_ID="pii-guardrail-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating an unguarded policy (to generate the fixture) and a guardrail-enforced policy..."
 GENERATOR_POLICY=$(create_policy "$(jq -n --arg name "pii-guardrail-generator-$SUFFIX" --arg model "$MODEL_DEFAULT" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model]}')")
@@ -39,10 +40,12 @@ create_binding "$(jq -n --arg policyId "$(echo "$GUARDED_POLICY" | jq -r '.id')"
 echo "Minted both keys, bound. Generating a fictional PII-bearing ticket live..."
 echo ""
 
+# 2. Your application code.
 call_chat "$(echo "$GENERATOR_KEY" | jq -r '.accessToken')" "$MODEL_DEFAULT" \
   "Generate a short, entirely fictional customer support ticket transcript for a QA test. Include a clearly fake SSN in XXX-XX-XXXX format, a fake 16-digit credit card number, a fake email address, and a fake phone number - all obviously placeholder values, never real. Output only the ticket text." \
   "generate-fixture"
 GENERATED_TICKET="$(jq -r '.choices[0].message.content // empty' "$RESP_BODY_FILE")"
+confirm_allowed "unguarded generator key"
 echo "Generated ticket (fed into the guardrail-enforced call below):"
 echo "  ${GENERATED_TICKET:0:300}..."
 echo ""
@@ -54,7 +57,11 @@ $GENERATED_TICKET" \
   "pii-guardrail-probe"
 jq '.' "$RESP_BODY_FILE"
 
+# 3. What the gateway did. The unguarded key must have produced real ticket
+# text, and the guarded key must refuse to forward it.
+confirm_blocked "guardrailDetectorsEnabled=[pii, secret]" 403
+
 echo ""
-echo "Expected: blocked before provider egress (403, detector_pii) - prompt-side PII is denied, not silently"
+echo "Confirmed: blocked before provider egress ($LAST_HTTP_CODE) - prompt-side PII is denied, not silently"
 echo "admitted. guardrailOutputAction: redact applies to generated output, not an incoming sensitive prompt."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - the block record names the pii/secret detector that fired; Policies tab ($CONSOLE_POLICIES) shows the guardrailDetectorsEnabled config."

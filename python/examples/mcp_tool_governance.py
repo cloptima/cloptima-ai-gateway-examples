@@ -33,6 +33,7 @@ import json
 import requests
 
 from lib import config
+from lib.confirm import confirm_blocked, confirm_equals
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key, graphql, list_llm_gateway_approvals
 from lib.models import MODEL_DEFAULT
 
@@ -132,8 +133,19 @@ def main():
     never_result = call_responses_api(key["accessToken"], "never", server_label)
     print(f"  [{never_result['outcome']}] {json.dumps(never_result)}")
 
+    confirm_blocked(always_result, "tool server status 'disabled'", status=403)
+    confirm_blocked(never_result, "tool server status 'disabled'", status=403)
+    always_violations = (always_result.get("body") or {}).get("violations") or []
+    never_violations = (never_result.get("body") or {}).get("violations") or []
+    confirm_equals("tool_server_disabled" in always_violations, True, "'always' should be blocked by tool_server_disabled")
+    confirm_equals("tool_server_disabled" in never_violations, True, "'never' should carry tool_server_disabled too")
+    confirm_equals(
+        ("tool_server_auto_approval_disabled" in never_violations) and ("tool_server_auto_approval_disabled" not in always_violations),
+        True,
+        "tool_server_auto_approval_disabled should apply to 'never' only",
+    )
     print(
-        "\nExpected: both calls are blocked (403) because the tool server above is still 'disabled' pending review - "
+        "\nConfirmed: both calls are blocked (403) because the tool server above is still 'disabled' pending review - "
         "'always' is blocked by tool_server_disabled alone. 'never' carries that SAME violation plus an additional "
         "tool_server_auto_approval_disabled entry the 'always' call does not get - proving the never-auto-approve "
         "rule is enforced as its own, independent check that would still apply even after this tool server is "
@@ -157,8 +169,9 @@ def main():
     )
     tool_server_2 = tool_server_2_data["createLLMGatewayToolServer"]
     print(f"  tool server {tool_server_2['id']} - status: {tool_server_2['status']}")
+    confirm_equals(tool_server_2.get("status"), "active", "applyImmediately: true should register the tool server as 'active'")
     print(
-        "Expected: status 'active' right away - applyImmediately: true meant this registration was approved and "
+        "Confirmed: status 'active' right away - applyImmediately: true meant this registration was approved and "
         "activated in this same call, with no separate review step and no tool_server_disabled block."
     )
 

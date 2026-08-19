@@ -20,6 +20,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_allowed
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -31,6 +32,7 @@ def main():
     app_id = f"multi-model-{suffix}"
     models = [MODEL_DEFAULT, *OTHER_GEMINI_MODELS.values()]
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print(f"Creating policy allowlisting {len(models)} Vertex AI Gemini model variants...")
     policy = create_policy({
         "name": f"multi-model-{suffix}",
@@ -43,6 +45,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound. Calling each model once...\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     client = openai_style_client(key["accessToken"], config.BASE_URL)
     results = []
     for model in models:
@@ -58,6 +61,10 @@ def main():
             note = f"status={result.get('status')} reason={str(result.get('reason'))[:200]}"
         print(f"  [{result['outcome']}] {model} - {note}")
 
+    # 3. What the gateway did. Every model listed in allowedModels must be served.
+    for result in results:
+        confirm_allowed(result, f"allowedModels includes {result['label']}")
+    print(f"\nConfirmed: all {len(results)} allowlisted models served under one policy.")
     print(
         "\nIf any model above came back blocked with a pricing-related reason rather than a policy/model-allow "
         "reason, that means the model is real and allowlisted but the gateway pricing catalog needs a cost entry "

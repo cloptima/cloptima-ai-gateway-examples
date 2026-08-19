@@ -16,6 +16,7 @@ MAX_OUTPUT_TOKENS=200
 SUFFIX="$(run_suffix)"
 APP_ID="token-limit-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating policy with maxOutputTokens=$MAX_OUTPUT_TOKENS..."
 POLICY=$(create_policy "$(jq -n --arg name "token-limit-$SUFFIX" --arg model "$MODEL_DEFAULT" --argjson tokens "$MAX_OUTPUT_TOKENS" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model], maxOutputTokens: $tokens}')")
@@ -29,11 +30,16 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Requesting a long response the policy should reject..."
 echo ""
 
+# 2. Your application code.
 call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "Write a detailed 500-word essay about the history of cloud computing." \
   "token-limit-probe"
 jq '.' "$RESP_BODY_FILE"
 
+# 3. What the gateway did. confirm_blocked stops the script if the policy
+# above was not held, so a silent regression cannot print as a success.
+confirm_blocked "maxOutputTokens=$MAX_OUTPUT_TOKENS" 403 "output limit"
+
 echo ""
-echo "Expected: blocked pre-flight (403) since the request's default max_tokens exceeds $MAX_OUTPUT_TOKENS,"
-echo "with both the requested and allowed values named in the error."
+echo "Confirmed: blocked pre-flight ($LAST_HTTP_CODE) - the request's default max_tokens exceeds $MAX_OUTPUT_TOKENS,"
+echo "and the error names both the requested and the allowed value."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - the block record names both the requested and allowed token values; Policies tab ($CONSOLE_POLICIES) shows the maxOutputTokens config."

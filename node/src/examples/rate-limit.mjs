@@ -7,6 +7,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmCapStopped } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 // Illustrative, not a platform minimum - change this and re-run to see the
@@ -18,6 +19,7 @@ async function main() {
   const suffix = runSuffix();
   const appId = `rate-limit-${suffix}`;
 
+  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
   console.log(`Creating policy with requestRateLimitPerMinute=${REQUEST_RATE_LIMIT_PER_MINUTE}...`);
   const policy = await createPolicy({
     name: `rate-limit-${suffix}`,
@@ -29,8 +31,11 @@ async function main() {
   });
   const key = await createVirtualKey({ name: `vk-rate-limit-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
   await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log(`Minted key ${key.id}, bound. Firing ${CALLS_TO_FIRE} calls back-to-back...\n`);
+  console.log(`Minted key ${key.id}, bound.`);
 
+  // 2. Your application code - the official OpenAI SDK, unchanged.
+  await startOfCalendarMinute();
+  console.log(`Firing ${CALLS_TO_FIRE} calls back-to-back...\n`);
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
   const results = [];
   for (let i = 0; i < CALLS_TO_FIRE; i += 1) {
@@ -44,10 +49,27 @@ async function main() {
     if (result.outcome !== 'allowed') break;
   }
 
-  const allowedCount = results.filter((r) => r.outcome === 'allowed').length;
-  console.log(`\n${allowedCount} calls allowed before the ${REQUEST_RATE_LIMIT_PER_MINUTE}/minute cap returned 429.`);
+  // 3. What the gateway did. confirmCapStopped stops the script if the cap
+  // never fired, so a silent regression cannot print as a success.
+  const { allowedCount, blocked } = confirmCapStopped(
+    results,
+    `requestRateLimitPerMinute=${REQUEST_RATE_LIMIT_PER_MINUTE}`,
+    { status: 429, expectedAllowed: REQUEST_RATE_LIMIT_PER_MINUTE },
+  );
+  console.log(`\n${allowedCount} calls served, then ${blocked.label} returned ${blocked.status} once the ${REQUEST_RATE_LIMIT_PER_MINUTE}/minute cap was reached.`);
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${appId}" for the 429 block record; Policies tab (${CONSOLE.policies}) shows the requestRateLimitPerMinute config that fired.`);
   console.log(JSON.stringify(results, null, 2));
+}
+
+// Rate limits are evaluated per calendar minute, so a burst that straddles a
+// minute boundary is split across two windows and can stay under the cap in
+// both. Waiting for a fresh window keeps the demonstration deterministic
+// instead of dependent on what time it happens to run.
+async function startOfCalendarMinute() {
+  const secondsLeft = 60 - new Date().getUTCSeconds();
+  if (secondsLeft >= CALLS_TO_FIRE + 5) return;
+  console.log(`Waiting ${secondsLeft}s for the next calendar minute so the whole burst lands in one window...`);
+  await new Promise((resolve) => { setTimeout(resolve, secondsLeft * 1000); });
 }
 
 main().catch((err) => {

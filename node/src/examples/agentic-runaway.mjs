@@ -17,6 +17,7 @@
 import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
+import { confirmAllowed, confirmCapStopped } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 // Illustrative, not a platform minimum. Bounds: 0-1,000 for both fields.
@@ -129,8 +130,14 @@ async function main() {
   for (const r of loopResults) {
     console.log(`  [${r.outcome}] turn ${r.index}`);
   }
+  // What the gateway did. The loop depth comes from the transcript itself, so
+  // this holds without the client reporting a count of any kind.
+  confirmCapStopped(loopResults, `maxLoopIterations=${MAX_LOOP_ITERATIONS}`, {
+    status: 403,
+    expectedAllowed: MAX_LOOP_ITERATIONS + 1,
+  });
   console.log(
-    `\nExpected: turns 0-${MAX_LOOP_ITERATIONS} allowed, turn ${MAX_LOOP_ITERATIONS + 1} onward blocked ` +
+    `\nConfirmed: turns 0-${MAX_LOOP_ITERATIONS} served, turn ${MAX_LOOP_ITERATIONS + 1} blocked ` +
     '("exceeds the active Cloptima agent limits") - counted from the tool-call turns already present in the ' +
     'conversation, not any client-supplied count.',
   );
@@ -158,11 +165,16 @@ async function main() {
   for (const r of retryResults) {
     console.log(`  [${r.outcome}] attempt ${r.index}`);
   }
+  confirmCapStopped(retryResults, `maxRetryCount=${MAX_RETRY_COUNT}`, {
+    status: 403,
+    expectedAllowed: MAX_RETRY_COUNT + 1,
+  });
   console.log(
-    `\nExpected: attempts 0-${MAX_RETRY_COUNT} allowed, attempt ${MAX_RETRY_COUNT + 1} onward blocked - counted ` +
+    `\nConfirmed: attempts 0-${MAX_RETRY_COUNT} served, attempt ${MAX_RETRY_COUNT + 1} blocked - counted ` +
     'per tool_call_id, so a different call id gets its own independent count.',
   );
   const otherCallResult = (await runRetryIterations(retryClient, MODELS.default, 'call-job-100', 1))[0];
+  confirmAllowed(otherCallResult, 'a different tool_call_id starts its own retry count');
   console.log(`  [${otherCallResult.outcome}] a different tool_call_id, first attempt`);
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${retryAppId}" for the blocked attempt.`);
   console.log(JSON.stringify([...retryResults, otherCallResult], null, 2));

@@ -15,6 +15,7 @@
 //   node src/examples/conversation-prompt-caching.mjs
 import { config, runSuffix, USER_AGENT, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
+import { confirmEquals } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 const MAX_TOKENS_PER_CALL = 80;
@@ -165,6 +166,12 @@ async function main() {
     messages.push({ role: 'assistant', content: reply });
   }
 
+  // 3. What the gateway did.
+  for (const result of results) {
+    confirmEquals(result.status, 200, `${result.label} served through the prompt-caching policy`);
+  }
+  const cachedPerTurn = results.map((r) => r.usage?.prompt_tokens_details?.cached_tokens ?? 0);
+  console.log(`\nConfirmed: all ${results.length} turns served. cached_tokens per turn: ${cachedPerTurn.join(', ')}`);
   console.log(
     '\nTurn 1 has nothing to reuse yet, so cached_tokens should read 0 there. From turn 2 ' +
     'onward, the repeated system context plus prior turns should start showing up as ' +

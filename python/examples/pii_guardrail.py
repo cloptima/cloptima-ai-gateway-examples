@@ -14,6 +14,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_allowed, confirm_blocked, confirm_equals
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -25,6 +26,7 @@ def main():
     generator_app_id = f"pii-guardrail-generator-{suffix}"
     guarded_app_id = f"pii-guardrail-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print("Creating an unguarded policy (to generate the fixture) and a guardrail-enforced policy...")
     generator_policy = create_policy({
         "name": f"pii-guardrail-generator-{suffix}",
@@ -49,6 +51,7 @@ def main():
     create_binding({"policyId": guarded_policy["id"], "teamId": "Platform AI", "appId": guarded_app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print("Minted both keys, bound. Generating a fictional PII-bearing ticket live...\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     generator_client = openai_style_client(generator_key["accessToken"], config.BASE_URL)
     generation = call_openai_style(
         generator_client, MODEL_DEFAULT,
@@ -67,9 +70,14 @@ def main():
         "pii-guardrail-probe",
     )
 
+    # 3. What the gateway did. The unguarded key must have produced real ticket
+    # text, and the guarded key must refuse to forward it.
     print(f"[{guarded['outcome']}] {json.dumps(guarded, indent=2, default=str)}")
+    confirm_allowed(generation, "unguarded generator key")
+    confirm_equals(len(generated_text.strip()) > 0, True, "unguarded generator key should return ticket text to feed the guarded call")
+    confirm_blocked(guarded, "guardrailDetectorsEnabled=[pii, secret]", status=403)
     print(
-        "\nExpected: blocked before provider egress (403, detector_pii) - prompt-side PII is denied, not silently "
+        f"\nConfirmed: blocked before provider egress ({guarded.get('status')}) - prompt-side PII is denied, not silently "
         "admitted. guardrailOutputAction: redact applies to generated output, not an incoming sensitive prompt."
     )
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - the block record names the pii/secret detector that fired; Policies tab ({config.CONSOLE['policies']}) shows the guardrailDetectorsEnabled config.")

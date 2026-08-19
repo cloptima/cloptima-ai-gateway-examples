@@ -22,6 +22,7 @@ MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
 SUFFIX="$(run_suffix)"
 APP_ID="cache-demo-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating policy with exact cache (enforce, full retention) and semantic cache (observe)..."
 POLICY=$(create_policy "$(jq -n --arg name "exact-semantic-cache-$SUFFIX" --arg model "$MODEL_DEFAULT" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model],
@@ -37,11 +38,13 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound."
 echo ""
 
+# 2. Your application code.
 echo "Repeating one exact prompt 5x for exact-cache evidence..."
 EXACT_PROMPT="Summarize, in one sentence, why cloud costs increased for a customer running more Kubernetes pods this month."
 for i in 1 2 3 4 5; do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "$EXACT_PROMPT" "exact-cache-$i" \
     "x-cloptima-feature: exact_cache_probe"
+  confirm_allowed "exact-cache-$i served through the cache-enabled policy"
 done
 
 echo ""
@@ -54,8 +57,13 @@ SEMANTIC_PROMPTS=(
 for i in "${!SEMANTIC_PROMPTS[@]}"; do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "${SEMANTIC_PROMPTS[$i]}" "semantic-cache-$((i + 1))" \
     "x-cloptima-feature: semantic_cache_probe"
+  confirm_allowed "semantic-cache-$((i + 1)) served through the cache-enabled policy"
 done
 
+# 3. What the gateway did. Caching is a cost optimisation, never a reason for
+# a call to fail - every repeat must still come back served.
+echo ""
+echo "Confirmed: all 8 calls served."
 echo ""
 echo "Cache hit/miss decisions show up in the console, not in this script's own output - compare latency and"
 echo "usage across the repeats above, then check the console for the authoritative hit/miss trail."

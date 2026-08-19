@@ -27,6 +27,7 @@ MODEL_FAMILY="$MODEL_DEFAULT"
 SUFFIX="$(run_suffix)"
 APP_ID="semantic-cache-enforce-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating policy with exact cache (enforce) and semantic cache (enforce), applyImmediately: true..."
 POLICY=$(create_policy "$(jq -n --arg name "semantic-cache-enforce-$SUFFIX" --arg model "$MODEL_DEFAULT" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model],
@@ -63,12 +64,14 @@ else
   echo "  no matching applied entry found."
 fi
 
+# 2. Your application code.
 echo ""
 echo "Repeating one exact prompt 5x for exact-cache evidence (enforced immediately, no approval needed)..."
 EXACT_PROMPT="Summarize, in one sentence, why cloud costs increased for a customer running more Kubernetes pods this month."
 for i in 1 2 3 4 5; do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "$EXACT_PROMPT" "exact-cache-$i" \
     "x-cloptima-feature: exact_cache_probe"
+  confirm_allowed "exact-cache-$i served under enforce-mode exact caching"
 done
 
 echo ""
@@ -81,9 +84,11 @@ SEMANTIC_PROMPTS=(
 for i in "${!SEMANTIC_PROMPTS[@]}"; do
   call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "${SEMANTIC_PROMPTS[$i]}" "semantic-cache-$((i + 1))" \
     "x-cloptima-feature: semantic_cache_probe"
+  confirm_allowed "semantic-cache-$((i + 1)) served under enforce-mode semantic caching"
 done
 
+# 3. What the gateway did. Enforce-mode caching must serve, never fail, a call.
 echo ""
-echo "Expected: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant"
+echo "Confirmed: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant"
 echo "semantic-cache enforcement was live from the start, with no separate review step needed."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - shows the applied semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab ($CONSOLE_POLICIES) shows the policy's cache config."

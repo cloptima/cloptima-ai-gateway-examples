@@ -7,6 +7,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_allowed
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import anthropic_style_client
 from lib.call_gateway import call_anthropic_style
@@ -17,6 +18,7 @@ def main():
     suffix = config.run_suffix()
     app_id = f"quickstart-anthropic-{suffix}"
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print(f"Creating policy allowing {MODEL_DEFAULT} on the managed Vertex AI provider...")
     policy = create_policy({
         "name": f"quickstart-anthropic-{suffix}",
@@ -37,6 +39,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Quickstart", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print("Bound. Calling the gateway with the official Anthropic SDK...")
 
+    # 2. Your application code - the official Anthropic SDK, unchanged.
     client = anthropic_style_client(key["accessToken"], config.BASE_URL)
     result = call_anthropic_style(
         client, MODEL_DEFAULT,
@@ -44,7 +47,9 @@ def main():
         "quickstart-anthropic",
     )
 
+    # 3. What the gateway did.
     print(f"\n[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
+    confirm_allowed(result, "quickstart call through a bound virtual key")
     print(f"\nEvidence: Explorer tab ({config.CONSOLE['spend']}) - find this request_id to see attributed spend and usage.")
 
 

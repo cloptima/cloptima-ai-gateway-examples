@@ -15,6 +15,7 @@ Run standalone from python/:
 import json
 
 from lib import config
+from lib.confirm import confirm_allowed
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
@@ -52,6 +53,7 @@ def main():
     create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {key['id']}, bound. Making a call that should trip the cost-exceeded downgrade...\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     client = openai_style_client(key["accessToken"], config.BASE_URL)
     result = call_openai_style(
         client, MODEL_DEFAULT,
@@ -59,9 +61,12 @@ def main():
         "cost-governance-probe",
     )
 
+    # 3. What the gateway did. The cap downgrades the scan; it must not fail the
+    # customer's request.
     print(f"[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
+    confirm_allowed(result, f"guardrailMaxCostPerRequestCents={MAX_COST_PER_REQUEST_CENTS} downgrade path")
     print(
-        f"\nExpected: allowed - the {MAX_COST_PER_REQUEST_CENTS}-cent cap is exceeded by the full detector scan, so the "
+        f"\nConfirmed: served - the {MAX_COST_PER_REQUEST_CENTS}-cent cap is exceeded by the full detector scan, so the "
         "request is served via the cheaper guardrailLightweightProfileEnabled fallback rather than blocked outright "
         "(guardrailCostExceededAction: 'downgrade'). Re-run with guardrailCostExceededAction: 'block' to see the deny "
         "path instead, or 'require_approval' to route it through the LLMGatewayApproval governance queue."

@@ -21,6 +21,7 @@ import json
 from openai import APIStatusError
 
 from lib import config
+from lib.confirm import confirm_allowed, confirm_cap_stopped
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.models import MODEL_DEFAULT
@@ -110,6 +111,7 @@ def run_retry_iterations(client, model, tool_call_id, iterations_to_simulate):
 def main():
     suffix = config.run_suffix()
 
+    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     loop_app_id = f"agentic-loop-{suffix}"
     print(f"Creating policy with maxLoopIterations={MAX_LOOP_ITERATIONS}...")
     loop_policy = create_policy({
@@ -122,14 +124,23 @@ def main():
     create_binding({"policyId": loop_policy["id"], "teamId": "Platform AI", "appId": loop_app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print(f"Minted key {loop_key['id']}, bound.\n")
 
+    # 2. Your application code - the official OpenAI SDK, unchanged.
     loop_client = openai_style_client(loop_key["accessToken"], config.BASE_URL)
     loop_iterations_to_simulate = MAX_LOOP_ITERATIONS + 2
     print(f"Driving a real tool-calling loop for {loop_iterations_to_simulate} turns...\n")
     loop_results = run_loop_iterations(loop_client, MODEL_DEFAULT, loop_iterations_to_simulate)
     for r in loop_results:
         print(f"  [{r['outcome']}] turn {r['index']}")
+
+    # 3. What the gateway did.
+    confirm_cap_stopped(
+        loop_results,
+        f"maxLoopIterations={MAX_LOOP_ITERATIONS}",
+        status=403,
+        expected_allowed=MAX_LOOP_ITERATIONS + 1,
+    )
     print(
-        f"\nExpected: turns 0-{MAX_LOOP_ITERATIONS} allowed, turn {MAX_LOOP_ITERATIONS + 1} onward blocked "
+        f"\nConfirmed: turns 0-{MAX_LOOP_ITERATIONS} served, turn {MAX_LOOP_ITERATIONS + 1} blocked "
         '("exceeds the active Cloptima agent limits") - counted from the tool-call turns already present in the '
         "conversation, not any client-supplied count."
     )
@@ -154,11 +165,19 @@ def main():
     retry_results = run_retry_iterations(retry_client, MODEL_DEFAULT, "call-job-99", retry_iterations_to_simulate)
     for r in retry_results:
         print(f"  [{r['outcome']}] attempt {r['index']}")
+
+    confirm_cap_stopped(
+        retry_results,
+        f"maxRetryCount={MAX_RETRY_COUNT}",
+        status=403,
+        expected_allowed=MAX_RETRY_COUNT + 1,
+    )
     print(
-        f"\nExpected: attempts 0-{MAX_RETRY_COUNT} allowed, attempt {MAX_RETRY_COUNT + 1} onward blocked - counted "
+        f"\nConfirmed: attempts 0-{MAX_RETRY_COUNT} served, attempt {MAX_RETRY_COUNT + 1} blocked - counted "
         "per tool_call_id, so a different call id gets its own independent count."
     )
     other_call_result = run_retry_iterations(retry_client, MODEL_DEFAULT, "call-job-100", 1)[0]
+    confirm_allowed(other_call_result, "a different tool_call_id starts its own retry count")
     print(f"  [{other_call_result['outcome']}] a different tool_call_id, first attempt")
     print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by app \"{retry_app_id}\" for the blocked attempt.")
     print(json.dumps(retry_results + [other_call_result], indent=2, default=str))

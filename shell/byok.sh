@@ -17,6 +17,7 @@ load_env
 SUFFIX="$(run_suffix)"
 APP_ID="byok-$SUFFIX"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating a provider credential (BYOK)..."
 CREATE_VARS=$(jq -n --arg apiKey "$PROVIDER_API_KEY" --arg displayName "byok-openai-$SUFFIX" \
   '{input: {provider: "openai", displayName: $displayName, apiKey: $apiKey}}')
@@ -61,12 +62,17 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Making one managed-gateway call routed through the BYOK credential..."
 echo ""
 
+# 2. Your application code.
 CALL_BODY=$(jq -n '{model: "openai/gpt-4o-mini", messages: [{role: "user", content: "In one sentence, confirm this call used a bring-your-own-key provider credential."}]}')
-curl -sS -X POST "$BASE_URL/v1/ai/chat/completions" \
+HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
   -H "x-cloptima-provider-credential-id: $CREDENTIAL_ID" \
-  -d "$CALL_BODY" | jq '.'
+  -d "$CALL_BODY")
+jq '.' "$RESP_BODY_FILE"
+
+# 3. What the gateway did.
+confirm_equals "$HTTP_CODE" "200" "call routed through the bring-your-own-key provider credential"
 
 echo ""
-echo "This call is billed to your own provider account, not Cloptima's managed-credit wallet."
+echo "Confirmed: served ($HTTP_CODE) and billed to your own provider account, not Cloptima's managed-credit wallet."
 echo "Evidence: Credentials tab ($CONSOLE_CREDENTIALS) shows the provider credential just created; Audit tab ($CONSOLE_AUDIT) and Explorer tab ($CONSOLE_SPEND) confirm attribution/telemetry are still captured even though spend is BYOK."

@@ -103,6 +103,7 @@ $(for i in $(seq 0 79); do
   printf -- "- \`app/services/module_%03d.py\` handles bounded-context concern #%d: validates inputs against the corresponding Pydantic schema, delegates persistence to its paired repository, publishes a domain event on state change, and never imports another service module directly - cross-context calls always go through the event bus.\n" "$i" "$i"
 done)"
 
+# 1. Cloptima setup - the policy, key, and binding are the whole contract.
 echo "Creating a policy with no cache config at all (default off) - any cached-token evidence below comes from the provider's own prompt caching, not a Cloptima cache feature..."
 POLICY=$(create_policy "$(jq -n --arg name "conversation-prompt-caching-$SUFFIX" --arg model "$MODEL_DEFAULT" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model]}')")
@@ -116,6 +117,7 @@ create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
 echo "Minted key $(echo "$KEY" | jq -r '.id'), bound."
 echo ""
 
+# 2. Your application code.
 echo "Sending a growing conversation - each turn resends the full history (system context + every prior exchange) plus one new short question, the same shape a coding assistant produces..."
 echo ""
 
@@ -136,6 +138,8 @@ for i in "${!FOLLOW_UP_QUESTIONS[@]}"; do
     -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
     -H "x-cloptima-feature: conversation_prompt_caching_probe" \
     -d "$BODY")
+  # 3. What the gateway did.
+  confirm_equals "$HTTP_CODE" "200" "turn $((i + 1)) should be served"
   if [ "$HTTP_CODE" -eq 200 ]; then
     PROMPT_TOKENS=$(jq -r '.usage.prompt_tokens // "?"' "$RESP_BODY_FILE")
     CACHED_TOKENS=$(jq -r '.usage.prompt_tokens_details.cached_tokens // 0' "$RESP_BODY_FILE")
@@ -148,6 +152,7 @@ for i in "${!FOLLOW_UP_QUESTIONS[@]}"; do
 done
 
 echo ""
+echo "Confirmed: all ${#FOLLOW_UP_QUESTIONS[@]} turns served through standard chat endpoint."
 echo "Turn 1 has nothing to reuse yet, so cached_tokens should read 0 there. From turn 2"
 echo "onward, the repeated system context plus prior turns should start showing up as"
 echo "cached_tokens instead of full-price prompt tokens - propagation is not always"

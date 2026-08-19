@@ -7,6 +7,7 @@ import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
+import { confirmBlocked } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 // Illustrative, not a platform minimum - the platform floor is 64. Change
@@ -17,6 +18,7 @@ async function main() {
   const suffix = runSuffix();
   const appId = `token-limit-${suffix}`;
 
+  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
   console.log(`Creating policy with maxOutputTokens=${MAX_OUTPUT_TOKENS}...`);
   const policy = await createPolicy({
     name: `token-limit-${suffix}`,
@@ -30,6 +32,7 @@ async function main() {
   await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
   console.log(`Minted key ${key.id}, bound. Requesting a long response the policy should reject...\n`);
 
+  // 2. Your application code - the official OpenAI SDK, unchanged.
   const client = openaiStyleClient(key.accessToken, config.baseUrl);
   const result = await callOpenAIStyle(client, {
     model: MODELS.default,
@@ -37,10 +40,13 @@ async function main() {
     label: 'token-limit-probe',
   });
 
+  // 3. What the gateway did. confirmBlocked stops the script if the policy
+  // above was not held, so a silent regression cannot print as a success.
   console.log(`[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
+  confirmBlocked(result, `maxOutputTokens=${MAX_OUTPUT_TOKENS}`, { status: 403, violation: 'output limit' });
   console.log(
-    `\nExpected: blocked pre-flight (403) since the request's default max_tokens exceeds ${MAX_OUTPUT_TOKENS}, ` +
-    'with both the requested and allowed values named in the error.',
+    `\nConfirmed: blocked pre-flight (${result.status}) - the request's default max_tokens exceeds ${MAX_OUTPUT_TOKENS}, ` +
+    'and the error names both the requested and the allowed value.',
   );
   console.log(`Evidence: Audit tab (${CONSOLE.audit}) - the block record names both the requested and allowed token values; Policies tab (${CONSOLE.policies}) shows the maxOutputTokens config.`);
 }

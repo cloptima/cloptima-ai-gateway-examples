@@ -105,14 +105,23 @@ echo ""
 echo "Calling the Responses API with require_approval: 'always'..."
 call_responses_api "$ACCESS_TOKEN" "always" "always-call"
 jq '.' "$RESP_BODY_FILE"
+confirm_blocked "always-call" 403
+ALWAYS_VIOLATIONS=$(jq -c '.violations // []' "$RESP_BODY_FILE")
 
 echo ""
 echo "Calling again with require_approval: 'never'..."
 call_responses_api "$ACCESS_TOKEN" "never" "never-call"
 jq '.' "$RESP_BODY_FILE"
+confirm_blocked "never-call" 403
+NEVER_VIOLATIONS=$(jq -c '.violations // []' "$RESP_BODY_FILE")
+
+confirm_equals "$(echo "$ALWAYS_VIOLATIONS" | jq 'contains(["tool_server_disabled"])')" "true" "'always' should be blocked by tool_server_disabled"
+confirm_equals "$(echo "$NEVER_VIOLATIONS" | jq 'contains(["tool_server_disabled"])')" "true" "'never' should carry tool_server_disabled too"
+confirm_equals "$(echo "$NEVER_VIOLATIONS" | jq 'contains(["tool_server_auto_approval_disabled"])')" "true" "'never' should carry tool_server_auto_approval_disabled"
+confirm_equals "$(echo "$ALWAYS_VIOLATIONS" | jq 'contains(["tool_server_auto_approval_disabled"])')" "false" "'always' should not carry tool_server_auto_approval_disabled"
 
 echo ""
-echo "Expected: both calls are blocked (403) because the tool server above is still 'disabled' pending review -"
+echo "Confirmed: both calls are blocked (403) because the tool server above is still 'disabled' pending review -"
 echo "'always' is blocked by tool_server_disabled alone. 'never' carries that SAME violation plus an additional"
 echo "tool_server_auto_approval_disabled entry the 'always' call does not get - proving the never-auto-approve"
 echo "rule is enforced as its own, independent check that would still apply even after this tool server is"
@@ -129,5 +138,7 @@ TOOL_SERVER_2=$(graphql \
     '{input: {name: $name, serverType: "mcp", serverUrl: "https://example.com/mcp", status: "active", allowedToolNames: ["search", "lookup"], applyImmediately: true}}')")
 TOOL_SERVER_2=$(echo "$TOOL_SERVER_2" | jq -c '.createLLMGatewayToolServer')
 echo "  tool server $(echo "$TOOL_SERVER_2" | jq -r '.id') - status: $(echo "$TOOL_SERVER_2" | jq -r '.status')"
-echo "Expected: status 'active' right away - applyImmediately: true meant this registration was approved and"
+TS2_STATUS=$(echo "$TOOL_SERVER_2" | jq -r '.status // empty')
+confirm_equals "$TS2_STATUS" "active" "applyImmediately: true should register the tool server as 'active'"
+echo "Confirmed: status 'active' right away - applyImmediately: true meant this registration was approved and"
 echo "activated in this same call, with no separate review step and no tool_server_disabled block."
