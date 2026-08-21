@@ -52,7 +52,7 @@ Each script prints illustrative policy limits it's using and says plainly that t
 - The gateway URL is already built into `lib.sh` - you don't need to know or set it.
 - OpenAI-style: `POST <gateway>/v1/ai/chat/completions` with `Authorization: Bearer <virtual key>`.
 - Anthropic-style: `POST <gateway>/v1/messages` with `x-api-key: <virtual key>` and `anthropic-version: 2023-06-01`.
-- Attribution/agent-context metadata rides as `x-cloptima-*` headers (see `../docs/ENVIRONMENT.md`).
+- Supported managed-gateway attribution rides as `x-cloptima-*` headers; telemetry-only dimensions are listed separately in `../docs/ENVIRONMENT.md`.
 - There is no client-side cache toggle - caching is entirely policy-driven server-side (see `../docs/CACHE_AND_POLICY.md`).
 - Policy/key/binding creation goes through the public `createLLMGatewayPolicy` / `createLLMGatewayKey` / `createLLMGatewayPolicyBinding` GraphQL mutations - see `lib.sh`.
 

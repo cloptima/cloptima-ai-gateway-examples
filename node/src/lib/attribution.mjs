@@ -1,9 +1,7 @@
-// Maps demo-friendly field names to the x-cloptima-* attribution headers the
-// managed gateway reads (see docs/ENVIRONMENT.md for the full header table).
-// These affect only cost/ROI reporting, never which requests are allowed or
-// blocked - teamId/appId/environment are only meaningful here for a key that
-// wasn't already minted scoped to them; a key created with its own
-// teamId/appId/environment doesn't need them repeated per call.
+// Maps demo-friendly field names to the managed-gateway attribution headers
+// used by these examples. The global environment guide lists telemetry-only
+// dimensions separately. A key configured with team/app/environment does not
+// need those values repeated on every call.
 export function attributionHeaders({
   teamId,
   appId,

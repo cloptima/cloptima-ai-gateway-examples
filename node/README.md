@@ -49,7 +49,7 @@ Each script prints illustrative policy limits it's using and says plainly that t
 - OpenAI-style client points at `<gateway>/v1/ai` (the SDK appends `/chat/completions`).
 - Anthropic-style client points at the gateway root (the SDK appends `/v1/messages`).
 - Both send the virtual key as their normal API key - no custom auth code needed.
-- Attribution and agent-context metadata ride as `x-cloptima-*` request headers (see `../docs/ENVIRONMENT.md`).
+- Supported managed-gateway attribution rides as `x-cloptima-*` request headers; telemetry-only dimensions are listed separately in `../docs/ENVIRONMENT.md`.
 - There is no client-side cache toggle - exact/semantic caching is entirely policy-driven server-side (see `../docs/CACHE_AND_POLICY.md`).
 - Policy/key/binding creation goes through the public `createLLMGatewayPolicy` / `createLLMGatewayKey` / `createLLMGatewayPolicyBinding` GraphQL mutations - see `src/lib/gatewayAdmin.mjs`.
 

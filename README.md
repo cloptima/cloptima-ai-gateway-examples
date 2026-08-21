@@ -130,7 +130,7 @@ Every script prints an `Evidence:` line pointing at one of these. `/` and `/llm/
 - Anthropic-compatible clients: base URL `<gateway>` root, key sent as `x-api-key: <virtual key>`.
 - Models are addressed by Cloptima canonical ID, e.g. `vertex_ai/gemini-2.5-flash`.
 - Policies, bindings, and virtual keys are created via the public `createLLMGatewayPolicy` / `createLLMGatewayPolicyBinding` / `createLLMGatewayKey` GraphQL mutations, using your `ai:admin` key - see any example's `lib`/`gatewayAdmin` helper for the exact calls.
-- Attribution, agent-session/run/tool context, and ROI business-transaction metadata all ride as `x-cloptima-*` request headers - no special SDK required.
+- Managed-gateway attribution, agent-session identity, and ROI business-transaction context can ride as documented `x-cloptima-*` request headers with no special inference SDK. Additional actor, release, finance, tenant, run, tool, and trace dimensions belong to direct telemetry integrations; see `docs/ENVIRONMENT.md` for the capability matrix.
 - Policy enforcement (allowed providers/models, rate/token/budget limits, agentic-runaway limits, required metadata) happens server-side based on which virtual key you used. Most blocks come back as `403` with `{error, reason, violations}`; a rate-limit block is `429`; a fully unscoped key with no attribution at all comes back as a plain `400` instead - see `docs/ENVIRONMENT.md`.
 - Unit economics (cost per unit, margin, ROI) are computed from real gateway/telemetry traffic plus a unit-metrics batch you submit yourself - see `unit-economics-roi`.
 - Enterprise contract pricing (negotiated rates, commitments) is modeled as a price sheet with rate overrides, applied to real cost calculations once approved - see `contract-pricing`.
