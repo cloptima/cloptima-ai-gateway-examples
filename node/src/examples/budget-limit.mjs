@@ -16,12 +16,9 @@ import { confirmCapStopped } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 // Illustrative, not a platform minimum. Bounds: dailyBudgetUsd accepts 0-10,000,000.
-const DAILY_BUDGET_USD = 0.01;
+const DAILY_BUDGET_USD = 0.001;
 const MAX_TOKENS_PER_CALL = 100;
-// At current catalog rates this budget is observed to cross around call ~46.
-// Keep real headroom above that rather than cutting it close to the
-// theoretical minimum, so a routine pricing update doesn't silently
-// make this loop exhaust MAX_CALLS before ever seeing the 402.
+// At current catalog rates this budget is observed to cross around call ~4-6.
 const MAX_CALLS = 60;
 
 async function callChat(virtualKey, { model, prompt }) {
