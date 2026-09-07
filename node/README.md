@@ -40,8 +40,26 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `npm run adaptive-routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `npm run prompt-release-workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
 | `npm run mcp-tool-governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `npm run cleanup` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
 
 Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - change the constant at the top of any script and re-run it.
+
+## Resetting Resources & Account Quotas
+
+Each example script provisions its own policy, virtual key, and binding on the fly. Running multiple scripts will consume quotas on your account (such as maximum policies or active keys). If you hit account limit errors during an evaluation tour, or want to clean up afterward, run:
+
+```bash
+npm run cleanup
+```
+
+In automated or CI environments, pass `--force` to bypass the interactive confirmation:
+
+```bash
+npm run cleanup -- --force
+```
+
+> [!WARNING]
+> **Account-Wide Cleanup**: This script permanently removes **all** AI gateway policies, policy bindings, registered MCP tool servers, and pending approval requests, and revokes **all** active virtual keys in the current account. Run only in sandbox or test accounts, never against production environments.
 
 ## How the gateway calls work
 

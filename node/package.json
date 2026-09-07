@@ -26,7 +26,8 @@
     "guardrail-cost-governance": "node src/examples/guardrail-cost-governance.mjs",
     "adaptive-routing": "node src/examples/adaptive-routing.mjs",
     "prompt-release-workflow": "node src/examples/prompt-release-workflow.mjs",
-    "mcp-tool-governance": "node src/examples/mcp-tool-governance.mjs"
+    "mcp-tool-governance": "node src/examples/mcp-tool-governance.mjs",
+    "cleanup": "node src/examples/cleanup.mjs"
   },
   "dependencies": {
     "openai": "^4.68.0",

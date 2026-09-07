@@ -44,8 +44,26 @@ Run any of these from the `python/` directory:
 | `python -m examples.adaptive_routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `python -m examples.prompt_release_workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
 | `python -m examples.mcp_tool_governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `python -m examples.cleanup` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
 
 Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - change the constant near the top of any script and re-run it.
+
+## Resetting Resources & Account Quotas
+
+Each example script provisions its own policy, virtual key, and binding on the fly. Running multiple scripts will consume quotas on your account (such as maximum policies or active keys). If you hit account limit errors during an evaluation tour, or want to clean up afterward, run:
+
+```bash
+python -m examples.cleanup
+```
+
+In automated or CI environments, pass `--force` to bypass the interactive confirmation:
+
+```bash
+python -m examples.cleanup --force
+```
+
+> [!WARNING]
+> **Account-Wide Cleanup**: This script permanently removes **all** AI gateway policies, policy bindings, registered MCP tool servers, and pending approval requests, and revokes **all** active virtual keys in the current account. Run only in sandbox or test accounts, never against production environments.
 
 ## How the gateway calls work
 

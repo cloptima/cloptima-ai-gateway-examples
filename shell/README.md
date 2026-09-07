@@ -42,8 +42,26 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `./adaptive-routing.sh` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `./prompt-release-workflow.sh` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
 | `./mcp-tool-governance.sh` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `./cleanup.sh` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
 
 Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - edit the constants near the top of any script and re-run it.
+
+## Resetting Resources & Account Quotas
+
+Each example script provisions its own policy, virtual key, and binding on the fly. Running multiple scripts will consume quotas on your account (such as maximum policies or active keys). If you hit account limit errors during an evaluation tour, or want to clean up afterward, run:
+
+```bash
+./cleanup.sh
+```
+
+In automated or CI environments, pass `--force` to bypass the interactive confirmation:
+
+```bash
+./cleanup.sh --force
+```
+
+> [!WARNING]
+> **Account-Wide Cleanup**: This script permanently removes **all** AI gateway policies, policy bindings, registered MCP tool servers, and pending approval requests, and revokes **all** active virtual keys in the current account. Run only in sandbox or test accounts, never against production environments.
 
 `rate-limit.sh` in particular is timing-sensitive: limits are evaluated per fixed calendar minute (e.g., 10:00:00 to 10:00:59 UTC) rather than a rolling window. Because `curl` subprocess overhead takes time, a run can cross a minute boundary and receive a fresh quota partway through. If it doesn't trip, simply re-run it.
 

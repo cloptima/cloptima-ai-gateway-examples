@@ -97,8 +97,26 @@ Each directory has the same set of independent example scripts:
 | `adaptive-routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `prompt-release-workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
 | `mcp-tool-governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `cleanup` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
 
 See each directory's own README for exact run commands. Every illustrative policy limit (rate, token, budget, loop-iteration caps) is a realistic starting point printed by the script itself, not a fixed platform requirement - change the constant near the top of any script and re-run it to see the behavior move. Note: Rate limits are enforced per calendar minute window (e.g., 10:00:00-10:00:59 UTC), not a rolling 60-second window.
+
+## Account Resource Quotas and Cleanup
+
+Each example dynamically provisions its own policy, virtual key, and binding. When running the entire validation tour or repeatedly executing examples, these resources accumulate in the account. Depending on your organization's subscription tier entitlements, you may encounter an error if you exceed account-level resource limits (such as the maximum allowed policies or active virtual keys).
+
+Each language directory includes a `cleanup` utility to reset your account's gateway resources:
+
+- **Node**: `npm run cleanup` (or `npm run cleanup -- --force` for non-interactive execution)
+- **Python**: `python -m examples.cleanup` (or `python -m examples.cleanup --force`)
+- **Shell**: `./cleanup.sh` (or `./cleanup.sh --force`)
+
+You can run this cleanup script before starting the validation tour to ensure a clean state, or after completing your evaluation run.
+
+> [!WARNING]
+> **Account-Wide Deletion Warning**: The cleanup script blindly and permanently removes **all** AI gateway policies, policy bindings, registered MCP tool servers, and pending approval requests, and revokes **all** active virtual keys in the authenticated account.
+>
+> Only run cleanup in dedicated sandbox, evaluation, or demo accounts. **Never** run this script in an account containing production traffic, live API keys, or persistent business policies.
 
 Already running your own agent framework (LangChain, LlamaIndex, CrewAI, the OpenAI Agents SDK, Vercel AI SDK)? See [`docs/FRAMEWORK_QUICKSTART.md`](docs/FRAMEWORK_QUICKSTART.md) - you can likely point it at the gateway directly without touching any example script.
 
