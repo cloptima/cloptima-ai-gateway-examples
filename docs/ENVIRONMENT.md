@@ -8,11 +8,11 @@ Every example in this repo needs just one thing:
 | --- | --- |
 | `CLOPTIMA_AI_ADMIN_KEY` | Management key (`ai:admin` + `ai:write` + `ai:read`). Creates/tests provider credentials, policies, bindings, and inference virtual keys, and reads back reports. Cannot invoke inference itself - each example mints its own inference-scoped (`ai:invoke`) virtual key from this and uses that for actual model calls. |
 
-One more, only for the BYOK example:
+One more, for the BYOK and Contract Pricing examples:
 
 | Variable | Notes |
 | --- | --- |
-| `PROVIDER_API_KEY` | Your own provider API key (e.g. OpenAI) - this is what BYOK brings onto the platform. |
+| `PROVIDER_API_KEY` | Your own provider API key (e.g. OpenAI) - required when bringing your own credentials and verifying negotiated enterprise contract rates (contract price sheets apply to customer-owned BYOK credentials, not Cloptima's managed-credits wallet). |
 
 Do not use the `ai:admin` key where an inference virtual key is expected, or vice versa - the gateway enforces this at the scope level, not just as a convention.
 

@@ -15,8 +15,9 @@ The console is a normal email/password login at your product console URL (e.g. `
 | Economics | `/llm/unit-economics` | Cost-per-unit, margin, and net-ROI, computed from real submitted traffic - a cost-center agent (ROI vs. a pre-LLM baseline) next to a profit-center agent (real booked revenue). | `unit-economics-roi` |
 | Recommendations | `/llm/recommendations` | Cost-optimization suggestions (model right-sizing, caching, guardrail tuning) computed from real usage history over time. Nothing here immediately after a single script run - it needs accumulated traffic. | Builds up from all traffic over time, not any one script |
 | Policies | `/llm/policies` | Every policy config created so far: limits, guardrails, cache modes. | Every example that calls `createLLMGatewayPolicy` |
-| Credentials | `/llm/credentials` | Virtual keys and BYOK provider credentials. | Every example (virtual keys); `byok` (provider credential) |
+| Credentials | `/llm/credentials` | Virtual keys and BYOK provider credentials. | Every example (virtual keys); `byok`, `contract-pricing` (provider credential) |
 | Audit | `/llm/audit` | Blocked-request records, pending governance-queue approvals, and routing-decision trails - policy, provider, model, token, guardrail, and agentic-limit blocks, each with the reason and violation detail. | `rate-limit`, `token-limit`, `budget-limit`, `agentic-runaway`, `pii-guardrail`, `provider-deny`, `metadata-deny`, `approval-workflow`, `guardrail-cost-governance`, `guardrail-detector-categories`, `adaptive-routing`, `mcp-tool-governance`, `prompt-release-workflow`, `semantic-cache-enforce` |
+| Sessions | `/llm/sessions` | Multi-turn agent session timelines: per-step tool calls, tokens, cost, and the ledger's cryptographic trace hash (`traceSha256`) for each request. | `session-trace-audit` |
 
 ## A five-minute walk, if you'd rather click than script
 

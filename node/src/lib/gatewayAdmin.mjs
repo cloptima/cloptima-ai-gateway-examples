@@ -77,3 +77,43 @@ export async function listLLMGatewayApprovals({ status, limit, offset } = {}) {
   );
   return data.llmGatewayApprovals;
 }
+
+export async function getLlmAgentSession({ sessionId, window } = {}) {
+  const data = await graphql(
+    `query GetAgentSession($sessionId: String!, $window: String) {
+      llmAgentSession(sessionId: $sessionId, window: $window) {
+        agentSessionId
+        steps {
+          requestId
+          provider
+          model
+          status
+          inputTokens
+          outputTokens
+          costUsd
+          requestedToolNames
+          responseToolNames
+          traceSha256
+        }
+      }
+    }`,
+    { sessionId, window },
+  );
+  return data.llmAgentSession;
+}
+
+export async function getLlmAgentSessionRecords({ sessionId, window } = {}) {
+  const data = await graphql(
+    `query GetAgentSessionRecords($sessionId: String!, $window: String) {
+      llmAgentSessionRecords(sessionId: $sessionId, window: $window) {
+        records {
+          requestId
+          verification
+        }
+      }
+    }`,
+    { sessionId, window },
+  );
+  return data.llmAgentSessionRecords;
+}
+

@@ -1,12 +1,14 @@
+from typing import Optional
+
 from anthropic import Anthropic
 from openai import OpenAI
 
 
-def openai_style_client(virtual_key: str, base_url: str) -> OpenAI:
+def openai_style_client(virtual_key: str, base_url: str, default_headers: Optional[dict] = None) -> OpenAI:
     """OpenAI-compatible client pointed at <base>/v1/ai; the SDK appends
     /chat/completions, /embeddings, etc. Sends Authorization: Bearer <key>.
     """
-    return OpenAI(api_key=virtual_key, base_url=f"{base_url}/v1/ai")
+    return OpenAI(api_key=virtual_key, base_url=f"{base_url}/v1/ai", default_headers=default_headers)
 
 
 def anthropic_style_client(virtual_key: str, base_url: str) -> Anthropic:

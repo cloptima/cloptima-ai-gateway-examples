@@ -1,28 +1,42 @@
-// Seeds one enterprise contract price sheet (illustrative negotiated rates,
-// the same kind of input a real customer's finance/procurement team would
-// configure - not a real contract), approves it, logs a commitment against
-// it, makes a few real calls at the overridden model, and verifies the
-// contracted rate actually applied by checking the finance dashboard's real
-// retail-vs-contracted numbers for this account.
+// Enterprise contract price sheets and negotiated rate overrides apply to
+// customer-owned provider accounts and credentials (bring-your-own-key / BYOK).
+// When an enterprise negotiates custom pricing with a model provider, those
+// contracted rates govern the customer's own provider keys. Cloptima's
+// managed-credits wallet provides platform-funded compute at standard catalog
+// rates, so negotiated price sheets apply strictly to BYOK credentials.
+//
+// This example registers an illustrative BYOK provider credential, seeds an
+// enterprise contract price sheet with a negotiated rate override on
+// openai/gpt-4o-mini, approves it, logs a commitment, executes real calls
+// routed through that credential, and verifies the finance dashboard reflects
+// the contracted cost below retail.
+//
+// Requires PROVIDER_API_KEY (your own OpenAI-compatible key) in .env.
 // Run standalone:
 //   node src/examples/contract-pricing.mjs
 import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
 import { graphql, createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
 import { openaiStyleClient } from '../lib/gatewayClients.mjs';
 import { callOpenAIStyle } from '../lib/callGateway.mjs';
-import { MODELS } from '../lib/models.mjs';
 
-// vertex_ai/gemini-2.5-flash retail: $0.30 in / $2.50 out per million tokens
+function required(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required env var ${name} - set your own provider API key in .env.`);
+  return value;
+}
+
+// openai/gpt-4o-mini retail: $0.15 in / $0.60 out per million tokens
 // (Cloptima's default LLM pricing catalog). ~20% off both - a realistic
-// volume discount for a mid-size enterprise agreement. No cached-token rate
+// volume discount for a negotiated enterprise agreement. No cached-token rate
 // is negotiated here - a real procurement conversation prices input and
 // output tokens, not a platform caching mechanism, so this leaves the cache
 // rate unset and lets it resolve proportionally from retail instead of
 // guessing a number.
-const PROVIDER = 'vertex_ai';
-const MODEL = MODELS.default.split('/').pop();
-const CONTRACT_INPUT_RATE = 0.24;
-const CONTRACT_OUTPUT_RATE = 2.0;
+const PROVIDER = 'openai';
+const MODEL = 'gpt-4o-mini';
+const CANONICAL_MODEL = 'openai/gpt-4o-mini';
+const CONTRACT_INPUT_RATE = 0.12;
+const CONTRACT_OUTPUT_RATE = 0.48;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -55,11 +69,22 @@ async function callWithPropagationRetry(client, opts, { attempts = 5, baseDelayM
 }
 
 async function main() {
+  const providerApiKey = required('PROVIDER_API_KEY');
   const suffix = runSuffix();
   const appId = `contract-pricing-${suffix}`;
   const now = new Date();
   const effectiveEnd = new Date(now);
   effectiveEnd.setUTCFullYear(effectiveEnd.getUTCFullYear() + 1);
+
+  console.log('Registering a provider credential (BYOK)...');
+  const createdCredential = await graphql(
+    `mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
+      createLLMProviderCredential(input: $input) { id provider displayName }
+    }`,
+    { input: { provider: PROVIDER, displayName: `byok-openai-${suffix}`, apiKey: providerApiKey } },
+  );
+  const credentialId = createdCredential.createLLMProviderCredential.id;
+  console.log(`  credential ${credentialId} (${createdCredential.createLLMProviderCredential.displayName})`);
 
   console.log(`Creating an illustrative enterprise price sheet (~20% off retail on ${MODEL})...`);
   const { createPriceSheet } = await graphql(
@@ -120,11 +145,11 @@ async function main() {
     },
   );
 
-  console.log('Creating a policy + key and making a few real calls at the contracted rate...');
+  console.log('Creating a policy + key and making real BYOK calls at the contracted rate...');
   const policy = await createPolicy({
     name: `contract-pricing-${suffix}`,
     mode: 'enforce', budgetMode: 'hard_fast',
-    allowedProviders: [PROVIDER], allowedModels: [MODELS.default],
+    allowedProviders: [PROVIDER], allowedModels: [CANONICAL_MODEL],
   });
   const key = await createVirtualKey({ name: `vk-contract-pricing-${suffix}`, teamId: 'Finance', appId, environment: 'prod' });
   await createBinding({ policyId: policy.id, teamId: 'Finance', appId, environment: 'prod', priority: 10, acknowledgeOverlap: true });
@@ -139,7 +164,8 @@ async function main() {
   let allowedCount = 0;
   for (const [i, prompt] of prompts.entries()) {
     const result = await callWithPropagationRetry(client, {
-      model: MODELS.default, prompt,
+      model: CANONICAL_MODEL, prompt,
+      headers: { 'x-cloptima-provider-credential-id': credentialId },
       label: `contract-call-${i + 1}`,
     });
     console.log(`  [${result.outcome}] contract-call-${i + 1}`);

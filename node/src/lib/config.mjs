@@ -41,6 +41,7 @@ export const CONSOLE = {
   policies: `${CONSOLE_ROOT}/policies`,
   credentials: `${CONSOLE_ROOT}/credentials`,
   audit: `${CONSOLE_ROOT}/audit`,
+  sessions: `${CONSOLE_ROOT}/sessions`,
 };
 
 // A short, unique-ish suffix so re-running an example doesn't collide with a

@@ -47,13 +47,14 @@ These validate the platform's multi-identity approval workflows, cache enforceme
 * **`semantic-cache-enforce`**: Demonstrates the semantic cache enforcement approval lifecycle.
 * **`mcp-tool-governance`**: Verifies that new MCP tool servers default to `disabled` and require security review before they can be called.
 * **`prompt-release-workflow`**: Runs a multi-case quality evaluation on a golden dataset, demonstrating failed-gate block and successful activation via `applyImmediately`.
+* **`session-trace-audit`**: Demonstrates tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification.
 
 ### Phase 3: Financial & ROI Analytics
 These validate cost-basis accounting and business return-on-investment telemetry.
 * **`exact-semantic-cache`**: Demonstrates cost savings from Cloptima's exact and semantic response cache.
 * **`conversation-prompt-caching`**: Demonstrates provider-side prompt prefix caching on a growing multi-turn conversation.
 * **`unit-economics-roi`**: Computes business profit-center and cost-center ROI.
-* **`contract-pricing`**: Compares retail costs vs commitment-tier negotiated contract rates.
+* **`contract-pricing`**: Compares retail costs vs commitment-tier negotiated contract rates on customer-owned provider credentials (BYOK).
 
 *(Note: alternate limit types and edge cases like `rate-limit`, `token-limit`, `agentic-runaway`, `provider-deny`, and `metadata-deny` are supplementary depth worth running after completing the core tour).*
 
@@ -89,7 +90,7 @@ Each directory has the same set of independent example scripts:
 | `metadata-deny` | A deliberately unscoped key with no attribution headers, blocked. |
 | `byok` | Bring your own provider credential and route it through Cloptima's governance layer. |
 | `unit-economics-roi` | A cost-center agent (ROI vs. a pre-LLM baseline) and a profit-center agent (real booked revenue) side by side, each with its own computed report. |
-| `contract-pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost. |
+| `contract-pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
 | `semantic-cache-enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
 | `approval-workflow` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
 | `guardrail-detector-categories` | Baseline guardrail categories (prompt injection, jailbreak, toxicity) plus the Enterprise-gated custom detector + third-party provider integration. |
@@ -97,6 +98,7 @@ Each directory has the same set of independent example scripts:
 | `adaptive-routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `prompt-release-workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
 | `mcp-tool-governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `session-trace-audit` | Tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification. |
 | `cleanup` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
 
 See each directory's own README for exact run commands. Every illustrative policy limit (rate, token, budget, loop-iteration caps) is a realistic starting point printed by the script itself, not a fixed platform requirement - change the constant near the top of any script and re-run it to see the behavior move. Note: Rate limits are enforced per calendar minute window (e.g., 10:00:00-10:00:59 UTC), not a rolling 60-second window.
@@ -151,7 +153,7 @@ Every script prints an `Evidence:` line pointing at one of these. `/` and `/llm/
 - Managed-gateway attribution, agent-session identity, and ROI business-transaction context can ride as documented `x-cloptima-*` request headers with no special inference SDK. Additional actor, release, finance, tenant, run, tool, and trace dimensions belong to direct telemetry integrations; see `docs/ENVIRONMENT.md` for the capability matrix.
 - Policy enforcement (allowed providers/models, rate/token/budget limits, agentic-runaway limits, required metadata) happens server-side based on which virtual key you used. Most blocks come back as `403` with `{error, reason, violations}`; a rate-limit block is `429`; a fully unscoped key with no attribution at all comes back as a plain `400` instead - see `docs/ENVIRONMENT.md`.
 - Unit economics (cost per unit, margin, ROI) are computed from real gateway/telemetry traffic plus a unit-metrics batch you submit yourself - see `unit-economics-roi`.
-- Enterprise contract pricing (negotiated rates, commitments) is modeled as a price sheet with rate overrides, applied to real cost calculations once approved - see `contract-pricing`.
+- Enterprise contract pricing (negotiated rates, commitments) is modeled as a price sheet with rate overrides governing customer-owned provider accounts and credentials (BYOK). Negotiated rate sheets apply to customer-owned keys, while the managed-credits wallet evaluates at standard catalog pricing - see `contract-pricing`.
 - If you write your own raw HTTP call against the gateway (rather than using the `openai`/`anthropic` SDKs, which already send their own identifying User-Agent), send a real `User-Agent` header. The gateway sits behind Cloudflare, and requests with no or generic UAs (a bare `curl`/`python-requests`/unset-fetch signature) can get bot-blocked before they ever reach the application. Every raw HTTP call in this repo already does this - see `USER_AGENT`/`config.USER_AGENT` in each language's `config` module.
 
 If something doesn't match what you see, the console's Audit/Explorer views are the source of truth, not this repo.

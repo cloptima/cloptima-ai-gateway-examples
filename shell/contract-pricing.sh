@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Seeds one enterprise contract price sheet (illustrative negotiated rates,
-# the same kind of input a real customer's finance/procurement team would
-# configure - not a real contract), approves it, logs a commitment against
-# it, makes a few real calls at the overridden model, and verifies the
-# contracted rate actually applied by checking the finance dashboard's real
-# retail-vs-contracted numbers for this account.
+# Enterprise contract price sheets and negotiated rate overrides apply to
+# customer-owned provider accounts and credentials (bring-your-own-key / BYOK).
+# When an enterprise negotiates custom pricing with a model provider, those
+# contracted rates govern the customer's own provider keys. Cloptima's
+# managed-credits wallet provides platform-funded compute at standard catalog
+# rates, so negotiated price sheets apply strictly to BYOK credentials.
+#
+# Requires PROVIDER_API_KEY (your own OpenAI-compatible key) in .env.
 # Run standalone: ./contract-pricing.sh
 set -euo pipefail
 
@@ -13,23 +15,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 load_env
 
-# vertex_ai/gemini-2.5-flash retail: $0.30 in / $2.50 out per million tokens
+: "${PROVIDER_API_KEY:?Set PROVIDER_API_KEY to your own OpenAI-compatible provider key in .env}"
+
+# openai/gpt-4o-mini retail: $0.15 in / $0.60 out per million tokens
 # (Cloptima's default LLM pricing catalog). ~20% off both - a realistic
-# volume discount for a mid-size enterprise agreement. No cached-token rate
+# volume discount for a negotiated enterprise agreement. No cached-token rate
 # is negotiated here - a real procurement conversation prices input and
 # output tokens, not a platform caching mechanism, so this leaves the cache
 # rate unset and lets it resolve proportionally from retail instead of
 # guessing a number.
-PROVIDER="vertex_ai"
-MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
-MODEL="gemini-2.5-flash"
-CONTRACT_INPUT_RATE="0.24"
-CONTRACT_OUTPUT_RATE="2.0"
+PROVIDER="openai"
+MODEL="gpt-4o-mini"
+CANONICAL_MODEL="openai/gpt-4o-mini"
+CONTRACT_INPUT_RATE="0.12"
+CONTRACT_OUTPUT_RATE="0.48"
 SUFFIX="$(run_suffix)"
 APP_ID="contract-pricing-$SUFFIX"
 
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 EFFECTIVE_END="$(date -u -v+1y +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 year' +%Y-%m-%dT%H:%M:%SZ)"
+
+echo "Registering a provider credential (BYOK)..."
+CREATE_CREDENTIAL_VARS=$(jq -n --arg apiKey "$PROVIDER_API_KEY" --arg displayName "byok-openai-$SUFFIX" \
+  '{input: {provider: "openai", displayName: $displayName, apiKey: $apiKey}}')
+CREATE_CREDENTIAL_RESULT=$(graphql 'mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
+  createLLMProviderCredential(input: $input) { id provider displayName }
+}' "$CREATE_CREDENTIAL_VARS")
+CREDENTIAL_ID=$(echo "$CREATE_CREDENTIAL_RESULT" | jq -r '.createLLMProviderCredential.id')
+echo "  credential $CREDENTIAL_ID ($(echo "$CREATE_CREDENTIAL_RESULT" | jq -r '.createLLMProviderCredential.displayName'))"
 
 echo "Creating an illustrative enterprise price sheet (~20% off retail on $MODEL)..."
 PRICE_SHEET_VARS=$(jq -n --arg name "Enterprise volume agreement ($SUFFIX)" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
@@ -55,9 +68,9 @@ COMMITMENT_VARS=$(jq -n --arg name "Annual commitment ($SUFFIX)" --arg start "$N
 graphql 'mutation CreateCommitment($input: CreateCommitmentInput!) { createCommitmentEntry(input: $input) { id name amountCents } }' \
   "$COMMITMENT_VARS" >/dev/null
 
-echo "Creating a policy + key and making a few real calls at the contracted rate..."
-POLICY=$(create_policy "$(jq -n --arg name "contract-pricing-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model]}')")
+echo "Creating a policy + key and making real BYOK calls at the contracted rate..."
+POLICY=$(create_policy "$(jq -n --arg name "contract-pricing-$SUFFIX" --arg model "$CANONICAL_MODEL" \
+  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["openai"], allowedModels: [$model]}')")
 POLICY_ID=$(echo "$POLICY" | jq -r '.id')
 KEY=$(create_virtual_key "$(jq -n --arg name "vk-contract-pricing-$SUFFIX" --arg appId "$APP_ID" \
   '{name: $name, teamId: "Finance", appId: $appId, environment: "prod"}')")
@@ -73,7 +86,7 @@ PROMPTS=(
 VERIFICATION_START=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 ALLOWED_COUNT=0
 for i in "${!PROMPTS[@]}"; do
-  call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "${PROMPTS[$i]}" "contract-call-$((i + 1))"
+  call_chat "$ACCESS_TOKEN" "$CANONICAL_MODEL" "${PROMPTS[$i]}" "contract-call-$((i + 1))" "x-cloptima-provider-credential-id: $CREDENTIAL_ID"
   if [ "$LAST_OUTCOME" = "allowed" ]; then
     ALLOWED_COUNT=$((ALLOWED_COUNT + 1))
   fi

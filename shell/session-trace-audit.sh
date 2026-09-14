@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# Configures tool I/O capture on an agentic policy, runs a multi-tool agentic
+# workflow with session correlation, and reads back the cryptographic ledger
+# audit trail and tool trace records.
+#
+# In enterprise agentic systems, agents are often given access to multiple tools:
+# standard lookups (check_order_status), financial actions (issue_refund), and
+# external data sinks (export_customer_data). Auditing tool invocations and their
+# exact arguments is critical to detect unintended behavior, prompt injection,
+# or rogue models transmitting customer data to unapproved external endpoints.
+#
+# Setting promptRetentionMode: 'tool_io' enables capturing tool calls, arguments,
+# and results verbatim, while keeping conversational user text and system
+# prompts uncollected to protect user privacy.
+#
+# Each step is anchored with a SHA-256 integrity hash (traceSha256) on the
+# ledger at request time, creating a tamper-evident audit record.
+#
+# Run standalone: ./session-trace-audit.sh
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib.sh"
+load_env
+
+MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
+SUFFIX="$(run_suffix)"
+APP_ID="support-agent-$SUFFIX"
+AGENT_SESSION_ID="session-$SUFFIX"
+ORDER_ID="ORD-$((RANDOM % 90000 + 10000))"
+CUSTOMER_ID="CUST-$((RANDOM % 9000 + 1000))"
+EXTERNAL_WEBHOOK_URL="https://partner-audit.example.com/ingest"
+
+# 1. Read-only order query tool
+CHECK_ORDER_TOOL='{
+  "type": "function",
+  "function": {
+    "name": "check_order_status",
+    "description": "Look up order fulfillment and delivery status by order ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {"order_id": {"type": "string", "description": "The unique order identifier (e.g. ORD-98241)."}},
+      "required": ["order_id"]
+    }
+  }
+}'
+
+# 2. Financial transaction tool
+ISSUE_REFUND_TOOL='{
+  "type": "function",
+  "function": {
+    "name": "issue_refund",
+    "description": "Authorize and issue a financial refund for an order.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "order_id": {"type": "string", "description": "The order identifier."},
+        "amount_usd": {"type": "number", "description": "Refund amount in USD."},
+        "reason": {"type": "string", "description": "Reason for refund."}
+      },
+      "required": ["order_id", "amount_usd", "reason"]
+    }
+  }
+}'
+
+# 3. Sensitive external egress tool (capable of transmitting customer data to external endpoints)
+EXPORT_CUSTOMER_DATA_TOOL='{
+  "type": "function",
+  "function": {
+    "name": "export_customer_data",
+    "description": "Export customer details, account records, and order history to an external data sink or webhook URL.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "customer_id": {"type": "string", "description": "The customer identifier."},
+        "destination_url": {"type": "string", "description": "External HTTP endpoint or webhook URL to receive exported data."},
+        "fields": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Customer record fields to include in export (e.g. email, shipping_address, payment_history)."
+        }
+      },
+      "required": ["customer_id", "destination_url", "fields"]
+    }
+  }
+}'
+
+TOOLS_JSON=$(jq -n --argjson a "$CHECK_ORDER_TOOL" --argjson b "$ISSUE_REFUND_TOOL" --argjson c "$EXPORT_CUSTOMER_DATA_TOOL" '[$a, $b, $c]')
+
+# A policy block from the gateway arrives as a non-2xx response. This posts a
+# raw chat-completions turn (lib.sh's call_chat only builds a single-prompt
+# body) so the full messages+tools shape can grow across turns, then sets
+# LAST_HTTP_CODE/LAST_OUTCOME the same way call_chat does so
+# confirm_allowed/confirm_blocked work unchanged.
+create_chat_turn() {
+  local access_token="$1" body="$2"
+  LAST_HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
+    -H "Authorization: Bearer $access_token" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
+    -H "x-cloptima-agent-session-id: $AGENT_SESSION_ID" \
+    -d "$body")
+  LAST_OUTCOME=$(outcome_for_status "$LAST_HTTP_CODE")
+}
+
+# 1. Cloptima setup: policy with tool_io retention, virtual key, and binding.
+echo "Creating policy with promptRetentionMode: 'tool_io'..."
+POLICY=$(create_policy "$(jq -n --arg name "session-trace-audit-$SUFFIX" --arg model "$MODEL_DEFAULT" \
+  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model], promptRetentionMode: "tool_io"}')")
+POLICY_ID=$(echo "$POLICY" | jq -r '.id')
+echo "  policy: $(echo "$POLICY" | jq -r '.name') ($POLICY_ID)"
+
+echo "Minting virtual key and binding for app \"$APP_ID\"..."
+KEY=$(create_virtual_key "$(jq -n --arg name "vk-session-trace-$SUFFIX" --arg appId "$APP_ID" \
+  '{name: $name, teamId: "Support AI", appId: $appId, environment: "production"}')")
+ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
+create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
+  '{policyId: $policyId, teamId: "Support AI", appId: $appId, environment: "production", priority: 10, acknowledgeOverlap: true}')" >/dev/null
+echo "  key minted: $(echo "$KEY" | jq -r '.id'), bound."
+echo ""
+
+# 2. Application code: a raw chat-completions call with session correlation.
+# Passing x-cloptima-agent-session-id correlates all turns into one agent session.
+MESSAGES=$(jq -n --arg orderId "$ORDER_ID" --arg customerId "$CUSTOMER_ID" --arg url "$EXTERNAL_WEBHOOK_URL" \
+  '[{role: "user", content: ("Check delivery status for order " + $orderId + " (customer " + $customerId + "). If delivered, export the customer delivery confirmation to partner audit sink " + $url + ".")}]')
+
+echo "Turn 1: User asks for order verification and conditional export..."
+BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson messages "$MESSAGES" --argjson tools "$TOOLS_JSON" \
+  '{model: $model, messages: $messages, tools: $tools}')
+create_chat_turn "$ACCESS_TOKEN" "$BODY"
+confirm_allowed "Turn 1 (tool call)"
+TURN_COUNT=1
+
+TOOL_CALL1_ID=$(jq -r '.choices[0].message.tool_calls[0].id // empty' "$RESP_BODY_FILE")
+if [ -z "$TOOL_CALL1_ID" ]; then
+  echo "ERROR: Expected model to return a tool call in Turn 1" >&2
+  exit 1
+fi
+TOOL_CALL1_NAME=$(jq -r '.choices[0].message.tool_calls[0].function.name' "$RESP_BODY_FILE")
+TOOL_CALL1_ARGS=$(jq -r '.choices[0].message.tool_calls[0].function.arguments' "$RESP_BODY_FILE")
+echo "  Model invoked: $TOOL_CALL1_NAME($TOOL_CALL1_ARGS)"
+
+MESSAGES=$(echo "$MESSAGES" | jq --arg id "$TOOL_CALL1_ID" --arg name "$TOOL_CALL1_NAME" --arg args "$TOOL_CALL1_ARGS" \
+  --arg orderId "$ORDER_ID" --arg customerId "$CUSTOMER_ID" \
+  '. + [
+    {role: "assistant", tool_calls: [{id: $id, type: "function", function: {name: $name, arguments: $args}}]},
+    {role: "tool", tool_call_id: $id, content: ({order_id: $orderId, customer_id: $customerId, status: "delivered", carrier: "FedEx", delivered_at: "2026-09-14T18:32:00Z"} | tojson)}
+  ]')
+
+echo ""
+echo "Turn 2: Feeding status (\"delivered\") to model; model decides next action..."
+BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson messages "$MESSAGES" --argjson tools "$TOOLS_JSON" \
+  '{model: $model, messages: $messages, tools: $tools}')
+create_chat_turn "$ACCESS_TOKEN" "$BODY"
+confirm_allowed "Turn 2 (agent turn)"
+TURN_COUNT=$((TURN_COUNT + 1))
+
+TOOL_CALL2_ID=$(jq -r '.choices[0].message.tool_calls[0].id // empty' "$RESP_BODY_FILE")
+if [ -n "$TOOL_CALL2_ID" ]; then
+  TOOL_CALL2_NAME=$(jq -r '.choices[0].message.tool_calls[0].function.name' "$RESP_BODY_FILE")
+  TOOL_CALL2_ARGS=$(jq -r '.choices[0].message.tool_calls[0].function.arguments' "$RESP_BODY_FILE")
+  echo "  Model invoked: $TOOL_CALL2_NAME($TOOL_CALL2_ARGS)"
+  echo "  -> Destination URL and customer fields captured in tool audit trail."
+
+  TRANSACTION_ID="TXN-$((RANDOM % 900000 + 100000))"
+  MESSAGES=$(echo "$MESSAGES" | jq --arg id "$TOOL_CALL2_ID" --arg name "$TOOL_CALL2_NAME" --arg args "$TOOL_CALL2_ARGS" \
+    --arg txn "$TRANSACTION_ID" \
+    '. + [
+      {role: "assistant", tool_calls: [{id: $id, type: "function", function: {name: $name, arguments: $args}}]},
+      {role: "tool", tool_call_id: $id, content: ({status: "success", exported_records: 1, destination_acknowledged: true, transaction_id: $txn} | tojson)}
+    ]')
+
+  echo ""
+  echo "Turn 3: Completing session after tool execution..."
+  BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson messages "$MESSAGES" --argjson tools "$TOOLS_JSON" \
+    '{model: $model, messages: $messages, tools: $tools}')
+  create_chat_turn "$ACCESS_TOKEN" "$BODY"
+  confirm_allowed "Turn 3 (completion)"
+  TURN_COUNT=$((TURN_COUNT + 1))
+  echo "  Model response: \"$(jq -r '.choices[0].message.content // empty' "$RESP_BODY_FILE")\""
+else
+  echo "  Model response: \"$(jq -r '.choices[0].message.content // empty' "$RESP_BODY_FILE")\""
+fi
+
+# 3. What the gateway did: inspect the ledger timeline and trace records.
+# Ledger entries land a short moment after the response returns, not
+# instantly - poll briefly instead of assuming a fixed delay is always
+# enough, so the trace hash is reliably present on first read.
+echo ""
+echo "Querying session steps from the ledger (llmAgentSession)..."
+SESSION_VARS=$(jq -n --arg sessionId "$AGENT_SESSION_ID" '{sessionId: $sessionId, window: null}')
+SESSION_QUERY='query GetAgentSession($sessionId: String!, $window: String) {
+  llmAgentSession(sessionId: $sessionId, window: $window) {
+    agentSessionId
+    steps {
+      requestId
+      provider
+      model
+      status
+      inputTokens
+      outputTokens
+      costUsd
+      requestedToolNames
+      responseToolNames
+      traceSha256
+    }
+  }
+}'
+for attempt in 0 1 2 3 4 5; do
+  if [ "$attempt" -gt 0 ]; then
+    sleep 0.75
+  fi
+  SESSION_RESULT=$(graphql "$SESSION_QUERY" "$SESSION_VARS")
+  AGENT_SESSION=$(echo "$SESSION_RESULT" | jq -c '.llmAgentSession')
+  STEPS_SO_FAR=$(echo "$AGENT_SESSION" | jq '.steps | length')
+  TRACES_READY=$(echo "$AGENT_SESSION" | jq --argjson expected "$TURN_COUNT" \
+    '(.steps | length) >= $expected and ([.steps[].traceSha256] | all)')
+  if [ "$TRACES_READY" = "true" ]; then
+    break
+  fi
+done
+STEP_COUNT=$(echo "$AGENT_SESSION" | jq '.steps | length')
+echo "  Session ID: $(echo "$AGENT_SESSION" | jq -r '.agentSessionId') ($STEP_COUNT steps recorded)"
+
+for i in $(seq 0 $((STEP_COUNT - 1))); do
+  STEP=$(echo "$AGENT_SESSION" | jq -c ".steps[$i]")
+  echo ""
+  echo "  Step $((i + 1)):"
+  echo "    Request ID: $(echo "$STEP" | jq -r '.requestId')"
+  echo "    Provider / Model: $(echo "$STEP" | jq -r '.provider') / $(echo "$STEP" | jq -r '.model')"
+  echo "    Status: $(echo "$STEP" | jq -r '.status') ($(echo "$STEP" | jq -r '.inputTokens') in / $(echo "$STEP" | jq -r '.outputTokens') out, cost: \$$(echo "$STEP" | jq -r '.costUsd'))"
+  echo "    Requested tools: $(echo "$STEP" | jq -r '(.requestedToolNames // []) | join(", ") | if . == "" then "none" else . end')"
+  echo "    Invoked tool: $(echo "$STEP" | jq -r '(.responseToolNames // []) | join(", ") | if . == "" then "none" else . end')"
+  echo "    Cryptographic Trace Hash (traceSha256): $(echo "$STEP" | jq -r '.traceSha256 // "none"')"
+done
+
+echo ""
+echo "Querying session trace records (llmAgentSessionRecords)..."
+RECORDS_RESULT=$(graphql 'query GetAgentSessionRecords($sessionId: String!, $window: String) {
+  llmAgentSessionRecords(sessionId: $sessionId, window: $window) {
+    records {
+      requestId
+      verification
+    }
+  }
+}' "$SESSION_VARS")
+RECORDS=$(echo "$RECORDS_RESULT" | jq -c '.llmAgentSessionRecords.records // []')
+RECORD_COUNT=$(echo "$RECORDS" | jq 'length')
+echo "  Trace records available: $RECORD_COUNT"
+echo "$RECORDS" | jq -r '.[] | "    Request: \(.requestId) -> verification: \(.verification)"'
+
+echo ""
+echo "Evidence: Sessions tab ($CONSOLE_SESSIONS?session=$AGENT_SESSION_ID) - inspect multi-turn tool call pairings, input parameters, and cryptographic verification."

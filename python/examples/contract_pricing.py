@@ -1,14 +1,22 @@
-"""Seeds one enterprise contract price sheet (illustrative negotiated rates,
-the same kind of input a real customer's finance/procurement team would
-configure - not a real contract), approves it, logs a commitment against it,
-makes a few real calls at the overridden model, and verifies the contracted
-rate actually applied by checking the finance dashboard's real
-retail-vs-contracted numbers for this account.
+"""Enterprise contract price sheets and negotiated rate overrides apply to
+customer-owned provider accounts and credentials (bring-your-own-key / BYOK).
+When an enterprise negotiates custom pricing with a model provider, those
+contracted rates govern the customer's own provider keys. Cloptima's
+managed-credits wallet provides platform-funded compute at standard catalog
+rates, so negotiated price sheets apply strictly to BYOK credentials.
 
+This example registers an illustrative BYOK provider credential, seeds an
+enterprise contract price sheet with a negotiated rate override on
+openai/gpt-4o-mini, approves it, logs a commitment, executes real calls
+routed through that credential, and verifies the finance dashboard reflects
+the contracted cost below retail.
+
+Requires PROVIDER_API_KEY (your own OpenAI-compatible key) in .env.
 Run standalone from python/:
     python -m examples.contract_pricing
 """
 
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -16,22 +24,31 @@ from lib import config
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key, graphql
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT
 
-# vertex_ai/gemini-2.5-flash retail: $0.30 in / $2.50 out per million tokens
+
+def _required_provider_key() -> str:
+    value = os.environ.get("PROVIDER_API_KEY")
+    if not value:
+        raise RuntimeError("Missing required env var PROVIDER_API_KEY - set your own provider API key in .env.")
+    return value
+
+
+# openai/gpt-4o-mini retail: $0.15 in / $0.60 out per million tokens
 # (Cloptima's default LLM pricing catalog). ~20% off both - a realistic
-# volume discount for a mid-size enterprise agreement. No cached-token rate
+# volume discount for a negotiated enterprise agreement. No cached-token rate
 # is negotiated here - a real procurement conversation prices input and
 # output tokens, not a platform caching mechanism, so this leaves the cache
 # rate unset and lets it resolve proportionally from retail instead of
 # guessing a number.
-PROVIDER = "vertex_ai"
-MODEL = MODEL_DEFAULT.split("/")[-1]
-CONTRACT_INPUT_RATE = 0.24
-CONTRACT_OUTPUT_RATE = 2.0
+PROVIDER = "openai"
+MODEL = "gpt-4o-mini"
+CANONICAL_MODEL = "openai/gpt-4o-mini"
+CONTRACT_INPUT_RATE = 0.12
+CONTRACT_OUTPUT_RATE = 0.48
 
 
 def main():
+    provider_api_key = _required_provider_key()
     suffix = config.run_suffix()
     app_id = f"contract-pricing-{suffix}"
     now = datetime.now(timezone.utc)
@@ -39,6 +56,16 @@ def main():
     # ValueError when now falls on Feb 29 and the following year isn't a
     # leap year.
     effective_end = now + timedelta(days=365)
+
+    print("Registering a provider credential (BYOK)...")
+    created_credential = graphql(
+        """mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
+          createLLMProviderCredential(input: $input) { id provider displayName }
+        }""",
+        {"input": {"provider": PROVIDER, "displayName": f"byok-openai-{suffix}", "apiKey": provider_api_key}},
+    )
+    credential_id = created_credential["createLLMProviderCredential"]["id"]
+    print(f"  credential {credential_id} ({created_credential['createLLMProviderCredential']['displayName']})")
 
     print(f"Creating an illustrative enterprise price sheet (~20% off retail on {MODEL})...")
     price_sheet = graphql(
@@ -99,11 +126,11 @@ def main():
         },
     )
 
-    print("Creating a policy + key and making a few real calls at the contracted rate...")
+    print("Creating a policy + key and making real BYOK calls at the contracted rate...")
     policy = create_policy({
         "name": f"contract-pricing-{suffix}",
         "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": [PROVIDER], "allowedModels": [MODEL_DEFAULT],
+        "allowedProviders": [PROVIDER], "allowedModels": [CANONICAL_MODEL],
     })
     key = create_virtual_key({"name": f"vk-contract-pricing-{suffix}", "teamId": "Finance", "appId": app_id, "environment": "prod"})
     create_binding({"policyId": policy["id"], "teamId": "Finance", "appId": app_id, "environment": "prod", "priority": 10, "acknowledgeOverlap": True})
@@ -118,8 +145,9 @@ def main():
     allowed_count = 0
     for i, prompt in enumerate(prompts):
         result = call_openai_style(
-            client, MODEL_DEFAULT, prompt,
+            client, CANONICAL_MODEL, prompt,
             f"contract-call-{i + 1}",
+            headers={"x-cloptima-provider-credential-id": credential_id},
         )
         print(f"  [{result['outcome']}] contract-call-{i + 1}")
         if result["outcome"] == "allowed":

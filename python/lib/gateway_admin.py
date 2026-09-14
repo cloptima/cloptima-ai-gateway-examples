@@ -85,3 +85,42 @@ def list_llm_gateway_approvals(
         {"status": status, "limit": limit, "offset": offset},
     )
     return data["llmGatewayApprovals"]
+
+
+def get_llm_agent_session(session_id: str, window: Optional[str] = None) -> dict:
+    data = graphql(
+        """query GetAgentSession($sessionId: String!, $window: String) {
+          llmAgentSession(sessionId: $sessionId, window: $window) {
+            agentSessionId
+            steps {
+              requestId
+              provider
+              model
+              status
+              inputTokens
+              outputTokens
+              costUsd
+              requestedToolNames
+              responseToolNames
+              traceSha256
+            }
+          }
+        }""",
+        {"sessionId": session_id, "window": window},
+    )
+    return data["llmAgentSession"]
+
+
+def get_llm_agent_session_records(session_id: str, window: Optional[str] = None) -> dict:
+    data = graphql(
+        """query GetAgentSessionRecords($sessionId: String!, $window: String) {
+          llmAgentSessionRecords(sessionId: $sessionId, window: $window) {
+            records {
+              requestId
+              verification
+            }
+          }
+        }""",
+        {"sessionId": session_id, "window": window},
+    )
+    return data["llmAgentSessionRecords"]

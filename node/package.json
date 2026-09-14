@@ -27,6 +27,7 @@
     "adaptive-routing": "node src/examples/adaptive-routing.mjs",
     "prompt-release-workflow": "node src/examples/prompt-release-workflow.mjs",
     "mcp-tool-governance": "node src/examples/mcp-tool-governance.mjs",
+    "session-trace-audit": "node src/examples/session-trace-audit.mjs",
     "cleanup": "node src/examples/cleanup.mjs"
   },
   "dependencies": {

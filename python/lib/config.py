@@ -44,6 +44,7 @@ CONSOLE = {
     "policies": f"{_CONSOLE_ROOT}/policies",
     "credentials": f"{_CONSOLE_ROOT}/credentials",
     "audit": f"{_CONSOLE_ROOT}/audit",
+    "sessions": f"{_CONSOLE_ROOT}/sessions",
 }
 
 
