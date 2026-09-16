@@ -26,7 +26,7 @@ SUFFIX="$(run_suffix)"
 APP_ID="prompt-release-$SUFFIX"
 
 echo "Creating baseline policy and virtual key..."
-POLICY=$(create_policy "$(jq -n --arg name "prompt-release-policy-$SUFFIX" --arg model "vertex_ai/gemini-2.5-flash" \
+POLICY=$(create_policy "$(jq -n --arg name "prompt-release-policy-$SUFFIX" --arg model "vertex_ai/gemini-3.5-flash-lite" \
   '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model], promptRetentionMode: "full"}')")
 POLICY_ID=$(echo "$POLICY" | jq -r '.id')
 
@@ -40,11 +40,11 @@ echo "  Policy bound, waiting for binding propagation..."
 sleep 3
 
 echo "Sending live chat calls to generate audit logs..."
-call_chat "$ACCESS_TOKEN" "vertex_ai/gemini-2.5-flash" \
+call_chat "$ACCESS_TOKEN" "vertex_ai/gemini-3.5-flash-lite" \
   "In one word (auth/billing/technical), classify this support ticket: I forgot my password, how do I reset it?" \
   "ticket-1-auth"
 
-call_chat "$ACCESS_TOKEN" "vertex_ai/gemini-2.5-flash" \
+call_chat "$ACCESS_TOKEN" "vertex_ai/gemini-3.5-flash-lite" \
   "In one word (auth/billing/technical), classify this support ticket: I was charged twice for my premium account." \
   "ticket-2-billing"
 

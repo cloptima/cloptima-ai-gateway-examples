@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 load_env
 
-MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
+MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 CURRENT_DAILY_BUDGET_USD=5
 REQUESTED_DAILY_BUDGET_USD=25
 SUFFIX="$(run_suffix)"

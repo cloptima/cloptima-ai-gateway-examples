@@ -23,9 +23,9 @@ import { confirmAllowed } from '../lib/confirm.mjs';
 import { MODELS, OTHER_GEMINI_MODELS } from '../lib/models.mjs';
 
 const CANDIDATE_MODELS = {
-  cheap: [OTHER_GEMINI_MODELS['gemini-2.5-flash-lite']],
+  cheap: [OTHER_GEMINI_MODELS['gemini-3.5-flash-lite']],
   balanced: [MODELS.default],
-  strong: [OTHER_GEMINI_MODELS['gemini-2.5-pro']],
+  strong: [MODELS.premium],
 };
 
 async function main() {

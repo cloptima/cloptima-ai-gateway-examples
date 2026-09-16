@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 load_env
 
-MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
+MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 # Illustrative, not a platform minimum. Bounds: 0-1,000 for both fields.
 MAX_LOOP_ITERATIONS=3
 MAX_RETRY_COUNT=2

@@ -1,5 +1,5 @@
 // One policy allowlisting several Vertex AI Gemini model variants (default
-// flash, a cheaper flash-lite, and a higher-capability pro), mints a key,
+// flash-lite and higher-performance flash variants), mints a key,
 // and calls each once - the "one policy, several models, compare cost and
 // latency" story. These examples are built with Gemini models; bring your
 // own credentials for other providers/models via the byok example.
@@ -25,7 +25,7 @@ import { MODELS, OTHER_GEMINI_MODELS } from '../lib/models.mjs';
 async function main() {
   const suffix = runSuffix();
   const appId = `multi-model-${suffix}`;
-  const models = [MODELS.default, ...Object.values(OTHER_GEMINI_MODELS)];
+  const models = Array.from(new Set([MODELS.default, ...Object.values(OTHER_GEMINI_MODELS)]));
 
   console.log(`Creating policy allowlisting ${models.length} Vertex AI Gemini model variants...`);
   const policy = await createPolicy({

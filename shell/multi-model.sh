@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One policy allowlisting several Vertex AI Gemini model variants (default
-# flash, a cheaper flash-lite, and a higher-capability pro), mints a key,
+# flash-lite and higher-performance flash variants), mints a key,
 # and calls each once - the "one policy, several models, compare cost and
 # latency" story. These examples are built with Gemini models; bring your
 # own credentials for other providers/models via the byok example.
@@ -20,9 +20,8 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 
 MODELS=(
-  "vertex_ai/gemini-2.5-flash"
-  "vertex_ai/gemini-2.5-flash-lite"
-  "vertex_ai/gemini-2.5-pro"
+  "vertex_ai/gemini-3.5-flash-lite"
+  "vertex_ai/gemini-3.8-flash"
 )
 SUFFIX="$(run_suffix)"
 APP_ID="multi-model-$SUFFIX"

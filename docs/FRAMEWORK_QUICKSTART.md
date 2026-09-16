@@ -10,7 +10,7 @@ Package/API names below shift between versions - treat these as a starting point
 from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
-    model="vertex_ai/gemini-2.5-flash",
+    model="vertex_ai/gemini-3.5-flash-lite",
     base_url="https://api.cloptima.ai/v1/ai",
     api_key="clop_vk_...",
     default_headers={
@@ -27,7 +27,7 @@ llm = ChatOpenAI(
 import { ChatOpenAI } from "@langchain/openai";
 
 const llm = new ChatOpenAI({
-  model: "vertex_ai/gemini-2.5-flash",
+  model: "vertex_ai/gemini-3.5-flash-lite",
   apiKey: "clop_vk_...",
   configuration: {
     baseURL: "https://api.cloptima.ai/v1/ai",
@@ -46,7 +46,7 @@ const llm = new ChatOpenAI({
 from llama_index.llms.openai import OpenAI
 
 llm = OpenAI(
-    model="vertex_ai/gemini-2.5-flash",
+    model="vertex_ai/gemini-3.5-flash-lite",
     api_base="https://api.cloptima.ai/v1/ai",
     api_key="clop_vk_...",
 )
@@ -61,7 +61,7 @@ from crewai import Agent
 from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
-    model="vertex_ai/gemini-2.5-flash",
+    model="vertex_ai/gemini-3.5-flash-lite",
     base_url="https://api.cloptima.ai/v1/ai",
     api_key="clop_vk_...",
 )
@@ -82,7 +82,7 @@ client = AsyncOpenAI(
 )
 set_default_openai_client(client)
 
-agent = Agent(name="demo-agent", model="vertex_ai/gemini-2.5-flash", instructions="...")
+agent = Agent(name="demo-agent", model="vertex_ai/gemini-3.5-flash-lite", instructions="...")
 Runner.run_sync(agent, "...")
 ```
 
@@ -103,7 +103,7 @@ const cloptima = createOpenAI({
 });
 
 const { text } = await generateText({
-  model: cloptima("vertex_ai/gemini-2.5-flash"),
+  model: cloptima("vertex_ai/gemini-3.5-flash-lite"),
   prompt: "...",
 });
 ```

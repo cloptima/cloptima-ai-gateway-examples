@@ -1,5 +1,5 @@
 """One policy allowlisting several Vertex AI Gemini model variants (default
-flash, a cheaper flash-lite, and a higher-capability pro), mints a key, and
+flash-lite and higher-performance flash variants), mints a key, and
 calls each once - the "one policy, several models, compare cost and latency"
 story. These examples are built with Gemini models; bring your own
 credentials for other providers/models via the byok example.
@@ -30,7 +30,7 @@ from lib.models import MODEL_DEFAULT, OTHER_GEMINI_MODELS
 def main():
     suffix = config.run_suffix()
     app_id = f"multi-model-{suffix}"
-    models = [MODEL_DEFAULT, *OTHER_GEMINI_MODELS.values()]
+    models = list(dict.fromkeys([MODEL_DEFAULT, *OTHER_GEMINI_MODELS.values()]))
 
     # 1. Cloptima setup - the policy, key, and binding are the whole contract.
     print(f"Creating policy allowlisting {len(models)} Vertex AI Gemini model variants...")

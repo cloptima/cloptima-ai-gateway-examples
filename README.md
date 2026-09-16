@@ -19,7 +19,7 @@ While this repository focuses on client-side developer integration examples and 
 
 ---
 
-These examples are all built against the `vertex_ai` provider - every model shown here is called through Vertex AI, using Cloptima's own canonical model IDs (e.g. `vertex_ai/gemini-2.5-flash`).
+These examples are all built against the `vertex_ai` provider - every model shown here is called through Vertex AI, using Cloptima's own canonical model IDs (e.g. `vertex_ai/gemini-3.5-flash-lite`).
 
 Every example is independent - it creates whatever policy, virtual key, and binding it needs, runs its own scenario, and prints what happened. Pick any single one and run it in isolation; nothing here depends on a prior step having run.
 
@@ -148,7 +148,7 @@ Every script prints an `Evidence:` line pointing at one of these. `/` and `/llm/
 - The gateway URL is hardcoded in each language's `config` module - nobody running these examples needs to know or set it.
 - OpenAI-compatible clients: base URL `<gateway>/v1/ai`, key sent as `Authorization: Bearer <virtual key>`.
 - Anthropic-compatible clients: base URL `<gateway>` root, key sent as `x-api-key: <virtual key>`.
-- Models are addressed by Cloptima canonical ID, e.g. `vertex_ai/gemini-2.5-flash`.
+- Models are addressed by Cloptima canonical ID, e.g. `vertex_ai/gemini-3.5-flash-lite`.
 - Policies, bindings, and virtual keys are created via the public `createLLMGatewayPolicy` / `createLLMGatewayPolicyBinding` / `createLLMGatewayKey` GraphQL mutations, using your `ai:admin` key - see any example's `lib`/`gatewayAdmin` helper for the exact calls.
 - Managed-gateway attribution, agent-session identity, and ROI business-transaction context can ride as documented `x-cloptima-*` request headers with no special inference SDK. Additional actor, release, finance, tenant, run, tool, and trace dimensions belong to direct telemetry integrations; see `docs/ENVIRONMENT.md` for the capability matrix.
 - Policy enforcement (allowed providers/models, rate/token/budget limits, agentic-runaway limits, required metadata) happens server-side based on which virtual key you used. Most blocks come back as `403` with `{error, reason, violations}`; a rate-limit block is `429`; a fully unscoped key with no attribution at all comes back as a plain `400` instead - see `docs/ENVIRONMENT.md`.

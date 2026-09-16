@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 load_env
 
-MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
+MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 MAX_TOKENS_PER_CALL=80
 SUFFIX="$(run_suffix)"
 APP_ID="conv-cache-$SUFFIX"

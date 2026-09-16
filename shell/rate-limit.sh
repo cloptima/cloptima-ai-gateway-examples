@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 load_env
 
-MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
+MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 # Illustrative, not a platform minimum - change this and re-run to see the
 # cap move. Bounds: requestRateLimitPerMinute accepts 1-1,000,000.
 REQUEST_RATE_LIMIT_PER_MINUTE=20

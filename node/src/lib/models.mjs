@@ -1,8 +1,8 @@
 // Cloptima canonical model IDs. These are examples, not an exhaustive list -
 // any active canonical model ID can be allowlisted in a policy.
 export const MODELS = {
-  default: 'vertex_ai/gemini-2.5-flash',
-  premium: 'vertex_ai/gemini-3.5-flash',
+  default: 'vertex_ai/gemini-3.5-flash-lite',
+  premium: 'vertex_ai/gemini-3.8-flash',
 };
 
 // Additional Gemini variants for the one-policy, several-models cost/latency
@@ -10,6 +10,6 @@ export const MODELS = {
 // Gemini models; bring your own credentials for other providers/models via
 // the byok example.
 export const OTHER_GEMINI_MODELS = {
-  'gemini-2.5-flash-lite': 'vertex_ai/gemini-2.5-flash-lite',
-  'gemini-2.5-pro': 'vertex_ai/gemini-2.5-pro',
+  'gemini-3.5-flash-lite': 'vertex_ai/gemini-3.5-flash-lite',
+  'gemini-3.8-flash': 'vertex_ai/gemini-3.8-flash',
 };

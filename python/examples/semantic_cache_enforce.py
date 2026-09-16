@@ -24,8 +24,8 @@ from lib.models import MODEL_DEFAULT
 
 ROUTE = "/v1/ai/chat/completions"
 # The class approval's modelFamily must be keyed on the full canonical model
-# ID (e.g. 'vertex_ai/gemini-2.5-flash'), not just its last path segment
-# (e.g. 'gemini-2.5-flash') - modelFamily requires the full canonical model ID.
+# ID (e.g. 'vertex_ai/gemini-3.5-flash-lite'), not just its last path segment
+# (e.g. 'gemini-3.5-flash-lite') - modelFamily requires the full canonical model ID.
 MODEL_FAMILY = MODEL_DEFAULT
 
 

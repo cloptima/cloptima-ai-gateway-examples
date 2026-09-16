@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 load_env
 
-MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
+MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 SUFFIX="$(run_suffix)"
 APP_ID="quickstart-anthropic-$SUFFIX"
 

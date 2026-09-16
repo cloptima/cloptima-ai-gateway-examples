@@ -25,6 +25,7 @@ import requests
 from lib import config
 from lib.confirm import confirm_equals
 from lib.gateway_admin import graphql, create_policy, create_virtual_key, create_binding
+from lib.models import MODEL_DEFAULT
 
 
 def main():
@@ -37,7 +38,7 @@ def main():
         "mode": "enforce",
         "budgetMode": "hard_fast",
         "allowedProviders": ["vertex_ai"],
-        "allowedModels": ["vertex_ai/gemini-2.5-flash"],
+        "allowedModels": [MODEL_DEFAULT],
         "promptRetentionMode": "full"
     })
 
@@ -68,7 +69,7 @@ def main():
                 "user-agent": config.USER_AGENT,
                 "authorization": f"Bearer {access_token}",
             },
-            json={"model": "vertex_ai/gemini-2.5-flash", "messages": [{"role": "user", "content": prompt}]},
+            json={"model": MODEL_DEFAULT, "messages": [{"role": "user", "content": prompt}]},
             timeout=30,
         )
         print(f"  [{'allowed' if response.status_code == 200 else 'blocked'}] {label} (http {response.status_code})")

@@ -18,11 +18,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 load_env
 
-MODEL_DEFAULT="vertex_ai/gemini-2.5-flash"
+MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 ROUTE="/v1/ai/chat/completions"
 # The class approval's modelFamily must be keyed on the full canonical model
-# ID (e.g. 'vertex_ai/gemini-2.5-flash'), not just its last path segment
-# (e.g. 'gemini-2.5-flash') - modelFamily requires the full canonical model ID.
+# ID (e.g. 'vertex_ai/gemini-3.5-flash-lite'), not just its last path segment
+# (e.g. 'gemini-3.5-flash-lite') - modelFamily requires the full canonical model ID.
 MODEL_FAMILY="$MODEL_DEFAULT"
 SUFFIX="$(run_suffix)"
 APP_ID="semantic-cache-enforce-$SUFFIX"

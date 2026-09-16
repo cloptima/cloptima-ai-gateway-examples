@@ -18,6 +18,7 @@
 //   node src/examples/prompt-release-workflow.mjs
 import { runSuffix, CONSOLE, config, USER_AGENT } from '../lib/config.mjs';
 import { graphql, createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
+import { MODELS } from '../lib/models.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -31,7 +32,7 @@ async function main() {
     mode: 'enforce',
     budgetMode: 'hard_fast',
     allowedProviders: ['vertex_ai'],
-    allowedModels: ['vertex_ai/gemini-2.5-flash'],
+    allowedModels: [MODELS.default],
     promptRetentionMode: 'full',
   });
 
@@ -62,7 +63,7 @@ async function main() {
         'user-agent': USER_AGENT,
         authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ model: 'vertex_ai/gemini-2.5-flash', messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model: MODELS.default, messages: [{ role: 'user', content: prompt }] }),
     });
     console.log(`  [${response.status === 200 ? 'allowed' : 'blocked'}] ${label} (http ${response.status})`);
   }

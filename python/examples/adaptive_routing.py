@@ -24,12 +24,12 @@ from lib.confirm import confirm_allowed
 from lib.gateway_admin import create_binding, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT, OTHER_GEMINI_MODELS
+from lib.models import MODEL_DEFAULT, MODEL_PREMIUM, OTHER_GEMINI_MODELS
 
 CANDIDATE_MODELS = {
-    "cheap": [OTHER_GEMINI_MODELS["gemini-2.5-flash-lite"]],
+    "cheap": [OTHER_GEMINI_MODELS["gemini-3.5-flash-lite"]],
     "balanced": [MODEL_DEFAULT],
-    "strong": [OTHER_GEMINI_MODELS["gemini-2.5-pro"]],
+    "strong": [MODEL_PREMIUM],
 }
 
 
