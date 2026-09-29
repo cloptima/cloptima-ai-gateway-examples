@@ -29,13 +29,14 @@ def main():
     })
     print(f"  policy {policy['name']} -> {policy['id']}")
 
-    print("Minting a virtual key scoped to this policy...")
+    print(f"Minting a virtual key attributed to team Quickstart, app {app_id}...")
     key = create_virtual_key({
         "name": f"vk-quickstart-anthropic-{suffix}",
         "teamId": "Quickstart", "appId": app_id, "environment": "dev",
     })
     print(f"  key {key['id']}")
 
+    print(f"Binding the policy to app {app_id} - the gateway serves only requests a bound policy covers...")
     create_binding({"policyId": policy["id"], "teamId": "Quickstart", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
     print("Bound. Calling the gateway with the official Anthropic SDK...")
 

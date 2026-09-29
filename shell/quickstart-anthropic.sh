@@ -20,13 +20,14 @@ POLICY=$(create_policy "$(jq -n --arg name "quickstart-anthropic-$SUFFIX" --arg 
 POLICY_ID=$(echo "$POLICY" | jq -r '.id')
 echo "  policy $(echo "$POLICY" | jq -r '.name') -> $POLICY_ID"
 
-echo "Minting a virtual key scoped to this policy..."
+echo "Minting a virtual key attributed to team Quickstart, app $APP_ID..."
 KEY=$(create_virtual_key "$(jq -n --arg name "vk-quickstart-anthropic-$SUFFIX" --arg appId "$APP_ID" \
   '{name: $name, teamId: "Quickstart", appId: $appId, environment: "dev"}')")
 KEY_ID=$(echo "$KEY" | jq -r '.id')
 ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
 echo "  key $KEY_ID"
 
+echo "Binding the policy to app $APP_ID - the gateway serves only requests a bound policy covers..."
 create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
   '{policyId: $policyId, teamId: "Quickstart", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
 echo "Bound. Calling the gateway..."

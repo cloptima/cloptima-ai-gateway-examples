@@ -23,13 +23,14 @@ async function main() {
   });
   console.log(`  policy ${policy.name} -> ${policy.id}`);
 
-  console.log('Minting a virtual key scoped to this policy...');
+  console.log(`Minting a virtual key attributed to team Quickstart, app ${appId}...`);
   const key = await createVirtualKey({
     name: `vk-quickstart-openai-${suffix}`,
     teamId: 'Quickstart', appId, environment: 'dev',
   });
   console.log(`  key ${key.id}`);
 
+  console.log(`Binding the policy to app ${appId} - the gateway serves only requests a bound policy covers...`);
   await createBinding({ policyId: policy.id, teamId: 'Quickstart', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
   console.log('Bound. Calling the gateway with the official OpenAI SDK...');
 
