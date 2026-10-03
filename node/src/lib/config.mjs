@@ -1,24 +1,14 @@
 import 'dotenv/config';
 
-function required(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required env var ${name} - copy .env.example to .env and fill it in.`);
-  }
-  return value;
-}
-
 // The gateway is a fixed public endpoint - nobody running these examples
 // should need to know or configure its URL. CLOPTIMA_GATEWAY_BASE_URL is an
 // optional override only, unset by default.
 const GATEWAY_BASE_URL_DEFAULT = 'https://api.cloptima.ai';
 
-// Every example in this repo needs only one thing: an ai:admin management
-// key. Each example mints whatever policy, binding, and virtual key it needs
-// from there - nothing is pre-provisioned.
 export const config = {
   baseUrl: (process.env.CLOPTIMA_GATEWAY_BASE_URL || GATEWAY_BASE_URL_DEFAULT).replace(/\/+$/, ''),
-  aiAdminKey: required('CLOPTIMA_AI_ADMIN_KEY'),
+  aiAdminKey: process.env.CLOPTIMA_AI_ADMIN_KEY || '',
+  virtualKey: process.env.CLOPTIMA_VIRTUAL_KEY || '',
 };
 
 // The gateway sits behind Cloudflare, which bot-manages requests with no or

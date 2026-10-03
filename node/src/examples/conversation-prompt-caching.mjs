@@ -1,32 +1,24 @@
-// A growing multi-turn conversation - the shape a coding assistant or any
-// chat agent actually produces: each turn resends the full message history
-// (a large, mostly-unchanged prefix) plus one new small exchange. This is
-// provider-side prompt caching, not Cloptima's own exact/semantic response
-// cache (see exact-semantic-cache.mjs) - there is no cache config on the policy
-// below, no repeated identical prompt, and no client-side toggle for it either.
-// When the provider recognizes a repeated prefix above its own minimum size,
-// it reuses the cached portion instead of reprocessing it, and reports how
-// many tokens came from cache versus fresh input on that call's usage.
-//
-// The first turn has nothing to reuse yet - only later turns should show a
-// nonzero cached-token count as the shared history grows past the provider's
-// caching threshold.
-// Run standalone:
-//   node src/examples/conversation-prompt-caching.mjs
-import { config, runSuffix, USER_AGENT, CONSOLE } from '../lib/config.mjs';
-import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { confirmEquals } from '../lib/confirm.mjs';
+/**
+ * Multi-Turn Coding Assistant: Provider Prompt Caching
+ *
+ * Demonstrates how multi-turn chat applications benefit from provider-side
+ * prompt caching on large recurring system prompts and conversation history.
+ *
+ * Pattern:
+ * 1. Initialize official SDKs (OpenAI and Anthropic) with Cloptima gateway URL & virtual key.
+ * 2. Case 1: OpenAI automatic prefix caching (prompt_tokens_details.cached_tokens).
+ * 3. Case 2: Anthropic explicit breakpoint prompt caching (cache_control: { type: 'ephemeral' }).
+ *
+ * Run standalone:
+ *   node src/examples/conversation-prompt-caching.mjs
+ */
+import { openaiClient, anthropicClient } from '../lib/client.mjs';
+import { getAccess } from '../lib/access.mjs';
 import { MODELS } from '../lib/models.mjs';
+import { CONSOLE } from '../lib/config.mjs';
 
-const MAX_TOKENS_PER_CALL = 80;
-
-// A stable "project context" block a coding assistant would keep resending
-// as system context on every turn. Real enough in size to matter: providers
-// apply automatic prompt caching only above their own minimum prefix size
-// (commonly in the low thousands of tokens), so a too-short stable prefix
-// here would never show cached-token evidence no matter how many turns
-// follow - this needs to be sized like a real system prompt, not a toy one,
-// even though each per-turn question below stays a single short sentence.
+// Providers apply automatic prompt caching only above their own minimum prefix size
+// (commonly 1,024+ tokens). A stable, realistic system prompt prefix ensures prompt caching activates.
 const PROJECT_CONTEXT = `You are a coding assistant working inside an existing repository.
 
 Project conventions:
@@ -100,90 +92,94 @@ Additional module notes for reference:
 }).join('\n');
 
 const FOLLOW_UP_QUESTIONS = [
-  'In one sentence, where should a new `Coupon` domain type live?',
-  'In one sentence, should a repository ever call a service class?',
-  'In one sentence, how should a background job in app/workers/ handle a transient DB error?',
-  'In one sentence, what type should an invoice total field use?',
+  'Where are typed domain entities located in this project?',
+  'What is the project policy regarding currency calculations and float types?',
+  'What logging convention should I follow when writing a new service class?',
 ];
 
-async function callChat(virtualKey, { model, messages, label }) {
-  const response = await fetch(`${config.baseUrl}/v1/ai/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'user-agent': USER_AGENT,
-      authorization: `Bearer ${virtualKey}`,
-      'x-cloptima-feature': 'conversation_prompt_caching_probe',
-    },
-    body: JSON.stringify({ model, max_tokens: MAX_TOKENS_PER_CALL, messages }),
-  });
-  const body = await response.json().catch(() => null);
-  const usage = response.status === 200 ? body?.usage : null;
-  return { label, status: response.status, usage, body };
-}
-
 async function main() {
-  const suffix = runSuffix();
-  const appId = `conv-cache-${suffix}`;
+  console.log('=== Multi-Turn Assistant: Provider Prompt Caching ===\n');
 
-  console.log(
-    'Creating a policy with no cache config at all (default off) - any cached-token ' +
-    'evidence below comes from the provider\'s own prompt caching, not a Cloptima ' +
-    'cache feature...',
-  );
-  const policy = await createPolicy({
-    name: `conversation-prompt-caching-${suffix}`,
-    mode: 'enforce',
-    budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'],
-    allowedModels: [MODELS.default],
+  // Governance setup: the policy this application runs under. Platform admins normally
+  //    create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+  //    points at a key whose policy already matches.
+  const access = await getAccess({
+    app: 'coding-assistant-demo',
+    policy: {
+      name: 'coding-assistant-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
+    },
   });
-  const key = await createVirtualKey({ name: `vk-conv-cache-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
-  await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log(`Minted key ${key.id}, bound.\n`);
 
-  console.log(
-    'Sending a growing conversation - each turn resends the full history (system ' +
-    'context + every prior exchange) plus one new short question, the same shape a ' +
-    'coding assistant produces...\n',
-  );
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  const client = openaiClient(access.virtualKey);
+
+  console.log('Starting multi-turn conversation with persistent codebase context...\n');
 
   const messages = [{ role: 'system', content: PROJECT_CONTEXT }];
-  const results = [];
-  for (let i = 0; i < FOLLOW_UP_QUESTIONS.length; i += 1) {
+
+  for (let i = 0; i < FOLLOW_UP_QUESTIONS.length; i++) {
     const question = FOLLOW_UP_QUESTIONS[i];
     messages.push({ role: 'user', content: question });
-    const result = await callChat(key.accessToken, { model: MODELS.default, messages, label: `turn-${i + 1}` });
-    results.push(result);
-    const usage = result.usage || {};
-    const cached = usage?.prompt_tokens_details?.cached_tokens ?? 0;
-    const promptTokens = usage?.prompt_tokens ?? '?';
-    console.log(`  [turn-${i + 1}] status=${result.status} prompt_tokens=${promptTokens} cached_tokens=${cached}`);
-    let reply = '';
-    if (result.status === 200 && result.body?.choices?.[0]?.message?.content) {
-      reply = result.body.choices[0].message.content;
+
+    console.log(`[Turn ${i + 1}] User: "${question}"`);
+
+    try {
+      const response = await client.chat.completions.create({
+        model: MODELS.default,
+        max_tokens: 80,
+        messages,
+      });
+
+      const reply = response.choices[0]?.message?.content?.trim() || '';
+      messages.push({ role: 'assistant', content: reply });
+
+      const usage = response.usage || {};
+      const promptTokens = usage.prompt_tokens ?? 0;
+      const cachedTokens = usage.prompt_tokens_details?.cached_tokens ?? 0;
+
+      console.log(`  Assistant: "${reply.slice(0, 70)}..."`);
+      console.log(`  Tokens: ${promptTokens} total prompt tokens (${cachedTokens} cached from previous turns)\n`);
+    } catch (err) {
+      console.error(`  Turn ${i + 1} error:`, err.message);
     }
-    messages.push({ role: 'assistant', content: reply });
   }
 
-  // 3. What the gateway did.
-  for (const result of results) {
-    confirmEquals(result.status, 200, `${result.label} served through the prompt-caching policy`);
+  // --- Case 2: Anthropic Messages API with Explicit Prompt Caching ---
+  console.log('--- Case 2: Anthropic Messages API (Explicit cache_control) ---');
+  const anthropic = anthropicClient(access.virtualKey);
+
+  try {
+    const anthropicResponse = await anthropic.messages.create({
+      model: MODELS.default,
+      max_tokens: 80,
+      system: [
+        {
+          type: 'text',
+          text: PROJECT_CONTEXT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
+      messages: [{ role: 'user', content: FOLLOW_UP_QUESTIONS[0] }],
+    });
+
+    const anthropicReply = anthropicResponse.content?.[0]?.text?.trim() || '';
+    const anthropicUsage = anthropicResponse.usage || {};
+    console.log(`User: "${FOLLOW_UP_QUESTIONS[0]}"`);
+    console.log(`Assistant: "${anthropicReply.slice(0, 70)}..."`);
+    console.log(`Tokens: ${anthropicUsage.input_tokens} input (created cache: ${anthropicUsage.cache_creation_input_tokens || 0}, read from cache: ${anthropicUsage.cache_read_input_tokens || 0})\n`);
+  } catch (err) {
+    console.log('Anthropic prompt caching check:', err.message, '\n');
   }
-  const cachedPerTurn = results.map((r) => r.usage?.prompt_tokens_details?.cached_tokens ?? 0);
-  console.log(`\nConfirmed: all ${results.length} turns served. cached_tokens per turn: ${cachedPerTurn.join(', ')}`);
-  console.log(
-    '\nTurn 1 has nothing to reuse yet, so cached_tokens should read 0 there. From turn 2 ' +
-    'onward, the repeated system context plus prior turns should start showing up as ' +
-    'cached_tokens instead of full-price prompt tokens - propagation is not always ' +
-    'immediate, so a slow start on turn 2 that catches up by turn 3-4 is expected, not a ' +
-    'problem with this example.',
-  );
-  console.log(`Evidence: Explorer tab (${CONSOLE.spend}) - filter by app "${appId}" - shows cached-token counts and the discounted per-request cost for each turn above.`);
-  console.log(JSON.stringify(results, null, 2));
+
+  console.log(`Review prompt caching savings in Cloptima Console:`);
+  console.log(`  - Spend Explorer: ${CONSOLE.spend}`);
 }
 
 main().catch((err) => {
-  console.error('conversation-prompt-caching failed:', err);
+  console.error('Example failed:', err.message);
   process.exitCode = 1;
 });

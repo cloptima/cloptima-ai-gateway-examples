@@ -1,64 +1,103 @@
-"""Seeds two unit-economics scenarios side by side - a cost center and a
-profit center - so both ways of measuring an LLM agent's business value
-show up as real numbers, not claims:
+"""Measuring LLM Business Value & Unit Economics: Cost Center vs Profit Center
 
-1. A support-automation agent (cost center): resolving a ticket avoids a
-   pre-LLM support cost rather than booking revenue, so its value is
-   tracked as calibratedBusinessValueUsd/netRoiUsd against an ROI
-   calibration row (value per success, and what handling it manually used
-   to cost).
-2. A checkout-upsell agent (profit center): each accepted upsell books
-   real revenue_usd, so its value shows up as a positive marginUsd
-   (revenue - spend) instead.
+This example demonstrates how production applications attribute real business value
+and financial return to LLM inference calls using Cloptima:
 
-Run standalone from python/:
-    python -m examples.unit_economics_roi
+1. Customer Support Automation (Cost Center):
+   Resolving a customer inquiry avoids manual tier-1 support costs ($3.50 baseline).
+   Its value is tracked through calibrated Net ROI (avoided cost minus LLM spend).
+
+2. E-Commerce Checkout Upsell (Profit Center):
+   Recommending complementary products at checkout generates incremental revenue.
+   Its value is tracked through Gross Margin (booked revenue minus LLM spend).
+
+Applications pass business outcome headers directly on inference calls:
+- x-cloptima-business-transaction-type
+- x-cloptima-business-outcome-status
+- x-cloptima-business-value-cents
+
+Run standalone:
+  python -m examples.unit_economics_roi
 """
-
+from datetime import datetime, timezone, timedelta
 import json
-from datetime import datetime, timedelta, timezone
-
+from typing import Any, Dict, List, Optional
 import requests
 
-from lib import config
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key, graphql
-from lib.gateway_clients import openai_style_client
-from lib.call_gateway import call_openai_style
+from lib import config, gateway_admin
+from lib.access import provision_app
 from lib.attribution import attribution_headers
-from lib.models import MODEL_DEFAULT
+from lib.client import openai_client
+from lib.config import BASE_URL, USER_AGENT
+from lib.models import MODELS
 
-COST_CENTER_TRANSACTION_TYPE = "support_ticket_resolved"
-PROFIT_CENTER_TRANSACTION_TYPE = "checkout_upsell_accepted"
+COST_CENTER_TYPE = "support_ticket_resolved"
+PROFIT_CENTER_TYPE = "checkout_upsell_accepted"
 
 
-def submit_unit_metrics(*, unit_type, unit_count, success_count, window_start, window_end, team_id, app_id, transaction_type, revenue_usd=None):
-    metric = {
+def seed_roi_calibration(suffix: str) -> None:
+    now = datetime.now(timezone.utc)
+    effective_end = now + timedelta(days=365)
+
+    print(f'Configuring FinOps ROI calibration for "{COST_CENTER_TYPE}"...')
+    gateway_admin.graphql(
+        """mutation UpsertROI($input: UpsertROICalibrationInput!) {
+          upsertROICalibration(input: $input) { id }
+        }""",
+        {
+            "input": {
+                "transactionType": COST_CENTER_TYPE,
+                "valuePerSuccessCents": 800,  # $8.00 estimated business value
+                "preLlmBaselineCostCents": 350,  # $3.50 manual support handling cost
+                "owner": "cloptima-ai-gateway-examples",
+                "effectiveStart": now.isoformat(),
+                "effectiveEnd": effective_end.isoformat(),
+            }
+        },
+    )
+
+
+def submit_unit_metrics(
+    unit_type: str,
+    unit_count: int,
+    success_count: int,
+    window_start: str,
+    window_end: str,
+    team_id: str,
+    app_id: str,
+    transaction_type: str,
+    revenue_usd: Optional[float] = None,
+) -> int:
+    metric: Dict[str, Any] = {
         "unit_type": unit_type,
         "unit_count": unit_count,
         "successful_unit_count": success_count,
         "window_start": window_start,
         "window_end": window_end,
-        "team_id": team_id, "app_id": app_id, "environment": "prod",
+        "team_id": team_id,
+        "app_id": app_id,
+        "environment": "production",
         "business_transaction_type": transaction_type,
     }
     if revenue_usd is not None:
         metric["revenue_usd"] = f"{revenue_usd:.2f}"
+
     response = requests.post(
-        f"{config.BASE_URL}/v1/ai/integrations/unit-metrics",
+        f"{BASE_URL}/v1/ai/integrations/unit-metrics",
         headers={
             "content-type": "application/json",
-            "user-agent": config.USER_AGENT,
+            "user-agent": USER_AGENT,
             "authorization": f"Bearer {config.AI_ADMIN_KEY}",
         },
         json={"metrics": [metric]},
         timeout=30,
     )
-    print(f"Unit-metrics status={response.status_code} body={response.text}")
+    return response.status_code
 
 
-def read_unit_economics(unit_type):
+def fetch_unit_economics_report(unit_type: str) -> List[dict]:
     try:
-        report = graphql(
+        report = gateway_admin.graphql(
             """query UnitEconomics($unitType: String!, $groupBy: String!, $window: String) {
               llmUnitEconomics(unitType: $unitType, groupBy: $groupBy, window: $window) {
                 rows { bucket unitCount costPerUnitUsd marginUsd netRoiUsd calibratedBusinessValueUsd missingMetadata }
@@ -66,141 +105,141 @@ def read_unit_economics(unit_type):
             }""",
             {"unitType": unit_type, "groupBy": "app_id", "window": "30d"},
         )
-        print(json.dumps(report["llmUnitEconomics"]["rows"], indent=2))
-    except RuntimeError as err:
-        print(f"Report not available yet (ledger aggregation may lag ingest): {err}")
+        return (report.get("llmUnitEconomics") or {}).get("rows") or []
+    except Exception as err:
+        print(f"  (Report aggregation pending: {err})")
+        return []
 
 
-def main():
+def main() -> None:
     suffix = config.run_suffix()
+    seed_roi_calibration(suffix)
 
-    # --- Cost center: support automation -------------------------------
-    support_app_id = f"unit-economics-support-{suffix}"
-    print(f'Seeding an ROI calibration row for "{COST_CENTER_TRANSACTION_TYPE}" (illustrative, not customer-validated)...')
-    now = datetime.now(timezone.utc)
-    effective_end = now + timedelta(days=365)
-    graphql(
-        "mutation UpsertROI($input: UpsertROICalibrationInput!) { upsertROICalibration(input: $input) { id } }",
-        {
-            "input": {
-                "transactionType": COST_CENTER_TRANSACTION_TYPE,
-                "valuePerSuccessCents": 800,
-                "preLlmBaselineCostCents": 350,
-                "owner": "cloptima-ai-gateway-examples",
-                "effectiveStart": now.isoformat(),
-                "effectiveEnd": effective_end.isoformat(),
-            },
+    # Governance setup (needs CLOPTIMA_AI_ADMIN_KEY): platform admins normally create the policy,
+    # key, and binding once in the Console, Terraform, or CI.
+    setup = provision_app(
+        app="unit-economics-demo",
+        policy={
+            "name": "unit-economics-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
         },
     )
-    print("ROI calibration seeded.")
+    app_id = setup["app_id"]
+    client = openai_client(setup["virtual_key"])
 
-    print("Creating a policy + key and making a few real support-automation calls...")
-    support_policy = create_policy({
-        "name": f"unit-economics-support-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-    })
-    support_key = create_virtual_key({"name": f"vk-unit-economics-support-{suffix}", "teamId": "Support Automation", "appId": support_app_id, "environment": "prod"})
-    create_binding({"policyId": support_policy["id"], "teamId": "Support Automation", "appId": support_app_id, "environment": "prod", "priority": 10, "acknowledgeOverlap": True})
-
-    support_client = openai_style_client(support_key["accessToken"], config.BASE_URL)
-    # The unit-metrics window is anchored to the calibration's own effective
-    # start, since the report only counts calibrated business value for the
-    # portion of the window the calibration was active for.
-    support_window_start = now.isoformat()
-    support_prompts = [
-        "A customer says their invoice total looks wrong for this month. Draft a short reply asking for the invoice number.",
-        "A customer cannot log in after resetting their password. Draft a short reply with the next step.",
-        "A customer wants to know why their monthly bill increased. Draft a short reply.",
+    # --- Scenario 1: Support Automation (Cost Center) ---
+    print("\n--- Scenario 1: Support Automation (Cost Center) ---")
+    support_tickets = [
+        {"id": f"{suffix}-sup-1", "query": "How do I update the billing email address for my organization?"},
+        {"id": f"{suffix}-sup-2", "query": "My API requests are failing with HTTP 401 unauthorized. Where do I get a new token?"},
     ]
-    support_success_count = 0
-    for i, prompt in enumerate(support_prompts):
-        result = call_openai_style(
-            support_client, MODEL_DEFAULT, prompt,
-            f"support-ticket-{i + 1}",
-            attribution_headers(
-                business_transaction_type=COST_CENTER_TRANSACTION_TYPE,
-                business_transaction_id=f"{suffix}-support-{i}",
+
+    support_start = datetime.now(timezone.utc).isoformat()
+    support_successes = 0
+
+    for i, ticket in enumerate(support_tickets):
+        try:
+            headers = attribution_headers(
+                business_transaction_type=COST_CENTER_TYPE,
+                business_transaction_id=ticket["id"],
                 business_transaction_unit_count=1,
                 business_outcome_status="resolved",
                 business_outcome_success=True,
                 business_value_cents=750,
-            ),
-        )
-        if result["outcome"] == "allowed":
-            support_success_count += 1
-        print(f"  [{result['outcome']}] support-ticket-{i + 1}")
+            )
+            response = client.chat.completions.create(
+                model=MODELS["default"],
+                messages=[
+                    {"role": "system", "content": "You are an automated support resolution assistant. Answer concisely in one sentence."},
+                    {"role": "user", "content": ticket["query"]},
+                ],
+                extra_headers=headers,
+            )
+            support_successes += 1
+            content = response.choices[0].message.content or ""
+            print(f"[Ticket {i + 1}] Resolved: {ticket['query']}")
+            print(f"Answer: {content.strip()}")
+        except Exception as err:
+            print(f"Ticket {i + 1} failed: {err}")
 
-    print("\nSubmitting a unit-metrics batch for the support-automation window...")
     submit_unit_metrics(
         unit_type="support_answers",
-        unit_count=len(support_prompts),
-        success_count=support_success_count,
-        window_start=support_window_start,
+        unit_count=len(support_tickets),
+        success_count=support_successes,
+        window_start=support_start,
         window_end=datetime.now(timezone.utc).isoformat(),
         team_id="Support Automation",
-        app_id=support_app_id,
-        transaction_type=COST_CENTER_TRANSACTION_TYPE,
+        app_id=app_id,
+        transaction_type=COST_CENTER_TYPE,
     )
+    print(f"Submitted support unit metrics batch ({support_successes}/{len(support_tickets)} resolved).")
 
-    # --- Profit center: checkout upsell agent ---------------------------
-    upsell_app_id = f"unit-economics-upsell-{suffix}"
-    print("\nCreating a policy + key and making a few real checkout-upsell calls...")
-    upsell_policy = create_policy({
-        "name": f"unit-economics-upsell-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-    })
-    upsell_key = create_virtual_key({"name": f"vk-unit-economics-upsell-{suffix}", "teamId": "Checkout Upsell", "appId": upsell_app_id, "environment": "prod"})
-    create_binding({"policyId": upsell_policy["id"], "teamId": "Checkout Upsell", "appId": upsell_app_id, "environment": "prod", "priority": 10, "acknowledgeOverlap": True})
-
-    upsell_client = openai_style_client(upsell_key["accessToken"], config.BASE_URL)
-    upsell_window_start = datetime.now(timezone.utc).isoformat()
+    # --- Scenario 2: E-Commerce Upsell (Profit Center) ---
+    print("\n--- Scenario 2: E-Commerce Upsell (Profit Center) ---")
     upsells = [
-        {"prompt": "A customer just added running shoes to their cart. Write a one-sentence checkout upsell for moisture-wicking socks.", "accepted_value_usd": 12.99},
-        {"prompt": "A customer just added a laptop to their cart. Write a one-sentence checkout upsell for a protective sleeve.", "accepted_value_usd": 24.99},
-        {"prompt": "A customer just added a coffee maker to their cart. Write a one-sentence checkout upsell for a bag of specialty coffee beans.", "accepted_value_usd": 16.99},
+        {"item": "Wireless Headphones", "upsell": "Protective Carrying Case", "value_usd": 19.99},
+        {"item": "Espresso Machine", "upsell": "Organic Coffee Beans (1kg)", "value_usd": 24.50},
     ]
-    upsell_success_count = 0
-    accepted_revenue_usd = 0.0
-    for i, upsell in enumerate(upsells):
-        result = call_openai_style(
-            upsell_client, MODEL_DEFAULT, upsell["prompt"],
-            f"checkout-upsell-{i + 1}",
-            attribution_headers(
-                business_transaction_type=PROFIT_CENTER_TRANSACTION_TYPE,
-                business_transaction_id=f"{suffix}-upsell-{i}",
+
+    upsell_start = datetime.now(timezone.utc).isoformat()
+    total_revenue_usd = 0.0
+    upsell_successes = 0
+
+    for i, item in enumerate(upsells):
+        try:
+            headers = attribution_headers(
+                business_transaction_type=PROFIT_CENTER_TYPE,
+                business_transaction_id=f"{suffix}-upsell-{i + 1}",
                 business_transaction_unit_count=1,
                 business_outcome_status="accepted",
                 business_outcome_success=True,
-                business_value_cents=round(upsell["accepted_value_usd"] * 100),
-            ),
-        )
-        if result["outcome"] == "allowed":
-            upsell_success_count += 1
-            accepted_revenue_usd += upsell["accepted_value_usd"]
-        print(f"  [{result['outcome']}] checkout-upsell-{i + 1} (${upsell['accepted_value_usd']:.2f} if accepted)")
+                business_value_cents=int(item["value_usd"] * 100),
+            )
+            response = client.chat.completions.create(
+                model=MODELS["default"],
+                messages=[
+                    {"role": "system", "content": "Generate a short 1-sentence checkout upsell recommendation."},
+                    {"role": "user", "content": f"Customer bought: {item['item']}. Suggest: {item['upsell']}."},
+                ],
+                extra_headers=headers,
+            )
+            upsell_successes += 1
+            total_revenue_usd += item["value_usd"]
+            content = response.choices[0].message.content or ""
+            print(f"[Upsell {i + 1}] Item: {item['item']} -> Suggested: {item['upsell']} (Value: ${item['value_usd']})")
+            print(f"Pitch: {content.strip()}")
+        except Exception as err:
+            print(f"Upsell {i + 1} failed: {err}")
 
-    print("\nSubmitting a unit-metrics batch for the checkout-upsell window, with the real revenue those accepted upsells booked...")
     submit_unit_metrics(
         unit_type="checkout_upsells",
         unit_count=len(upsells),
-        success_count=upsell_success_count,
-        window_start=upsell_window_start,
+        success_count=upsell_successes,
+        window_start=upsell_start,
         window_end=datetime.now(timezone.utc).isoformat(),
-        team_id="Checkout Upsell",
-        app_id=upsell_app_id,
-        transaction_type=PROFIT_CENTER_TRANSACTION_TYPE,
-        revenue_usd=accepted_revenue_usd,
+        team_id="Growth Engineering",
+        app_id=app_id,
+        transaction_type=PROFIT_CENTER_TYPE,
+        revenue_usd=total_revenue_usd,
     )
+    print(f"Submitted upsell unit metrics batch (${total_revenue_usd:.2f} booked revenue).")
 
-    print("\nReading back the cost-center report (support automation - value shows up as calibrated ROI, not margin)...")
-    read_unit_economics("support_answers")
+    # --- Unit Economics & ROI Reporting ---
+    print("\n--- Cloptima Unit Economics & ROI Reports ---")
+    support_report = fetch_unit_economics_report("support_answers")
+    if support_report:
+        print("Support Automation (Cost Avoidance / Net ROI):", json.dumps(support_report, indent=2))
+    else:
+        print("Support Automation metrics recorded. View aggregated ROI cards in Cloptima Economics tab.")
 
-    print("\nReading back the profit-center report (checkout upsell - value shows up as a positive margin from real revenue)...")
-    read_unit_economics("checkout_upsells")
-
-    print(f"\nEvidence: Economics tab ({config.CONSOLE['unit_economics']}) shows both apps side by side - cost-per-unit, margin, and net-ROI, grouped by app.")
+    upsell_report = fetch_unit_economics_report("checkout_upsells")
+    if upsell_report:
+        print("Checkout Upsell (Direct Revenue / Gross Margin):", json.dumps(upsell_report, indent=2))
+    else:
+        print("Checkout Upsell metrics recorded. View gross margin cards in Cloptima Economics tab.")
 
 
 if __name__ == "__main__":

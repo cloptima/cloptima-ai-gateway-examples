@@ -1,27 +1,52 @@
-// Seeds two unit-economics scenarios side by side - a cost center and a
-// profit center - so both ways of measuring an LLM agent's business value
-// show up as real numbers, not claims:
-//
-// 1. A support-automation agent (cost center): resolving a ticket avoids a
-//    pre-LLM support cost rather than booking revenue, so its value is
-//    tracked as calibratedBusinessValueUsd/netRoiUsd against an ROI
-//    calibration row (value per success, and what handling it manually used
-//    to cost).
-// 2. A checkout-upsell agent (profit center): each accepted upsell books
-//    real revenue_usd, so its value shows up as a positive marginUsd
-//    (revenue - spend) instead.
-//
-// Run standalone:
-//   node src/examples/unit-economics-roi.mjs
-import { config, runSuffix, USER_AGENT, CONSOLE } from '../lib/config.mjs';
-import { graphql, createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { callOpenAIStyle } from '../lib/callGateway.mjs';
+/**
+ * Measuring LLM Business Value & Unit Economics: Cost Center vs Profit Center
+ *
+ * This example demonstrates how production applications attribute real business value
+ * and financial return to LLM inference calls using Cloptima:
+ *
+ * 1. Customer Support Automation (Cost Center):
+ *    Resolving a customer inquiry avoids manual tier-1 support costs ($3.50 baseline).
+ *    Its value is tracked through calibrated Net ROI (avoided cost minus LLM spend).
+ *
+ * 2. E-Commerce Checkout Upsell (Profit Center):
+ *    Recommending complementary products at checkout generates incremental revenue.
+ *    Its value is tracked through Gross Margin (booked revenue minus LLM spend).
+ *
+ * Applications pass business outcome headers directly on inference calls:
+ * - x-cloptima-business-transaction-type
+ * - x-cloptima-business-outcome-status
+ * - x-cloptima-business-value-cents
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { provisionApp } from '../lib/access.mjs';
+import { config, runSuffix, USER_AGENT } from '../lib/config.mjs';
+import { graphql } from '../lib/gatewayAdmin.mjs';
 import { attributionHeaders } from '../lib/attribution.mjs';
 import { MODELS } from '../lib/models.mjs';
 
-const COST_CENTER_TRANSACTION_TYPE = 'support_ticket_resolved';
-const PROFIT_CENTER_TRANSACTION_TYPE = 'checkout_upsell_accepted';
+const COST_CENTER_TYPE = 'support_ticket_resolved';
+const PROFIT_CENTER_TYPE = 'checkout_upsell_accepted';
+
+async function seedRoiCalibration(suffix) {
+  const now = new Date();
+  const effectiveEnd = new Date(now);
+  effectiveEnd.setUTCFullYear(effectiveEnd.getUTCFullYear() + 1);
+
+  console.log(`Configuring FinOps ROI calibration for "${COST_CENTER_TYPE}"...`);
+  await graphql(
+    `mutation UpsertROI($input: UpsertROICalibrationInput!) { upsertROICalibration(input: $input) { id } }`,
+    {
+      input: {
+        transactionType: COST_CENTER_TYPE,
+        valuePerSuccessCents: 800,        // $8.00 estimated business value
+        preLlmBaselineCostCents: 350,     // $3.50 manual support handling cost
+        owner: 'cloptima-ai-gateway-examples',
+        effectiveStart: now.toISOString(),
+        effectiveEnd: effectiveEnd.toISOString(),
+      },
+    },
+  );
+}
 
 async function submitUnitMetrics({ unitType, unitCount, successCount, windowStart, windowEnd, teamId, appId, transactionType, revenueUsd }) {
   const metric = {
@@ -30,20 +55,26 @@ async function submitUnitMetrics({ unitType, unitCount, successCount, windowStar
     successful_unit_count: successCount,
     window_start: windowStart,
     window_end: windowEnd,
-    team_id: teamId, app_id: appId, environment: 'prod',
+    team_id: teamId,
+    app_id: appId,
+    environment: 'production',
     business_transaction_type: transactionType,
   };
   if (revenueUsd !== undefined) metric.revenue_usd = revenueUsd.toFixed(2);
+
   const response = await fetch(`${config.baseUrl}/v1/ai/integrations/unit-metrics`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'user-agent': USER_AGENT, authorization: `Bearer ${config.aiAdminKey}` },
+    headers: {
+      'content-type': 'application/json',
+      'user-agent': USER_AGENT,
+      authorization: `Bearer ${config.aiAdminKey}`,
+    },
     body: JSON.stringify({ metrics: [metric] }),
   });
-  const body = await response.json().catch(() => null);
-  console.log(`Unit-metrics status=${response.status} body=${JSON.stringify(body)}`);
+  return response.status;
 }
 
-async function readUnitEconomics(unitType) {
+async function fetchUnitEconomicsReport(unitType) {
   try {
     const report = await graphql(
       `query UnitEconomics($unitType: String!, $groupBy: String!, $window: String) {
@@ -53,148 +84,158 @@ async function readUnitEconomics(unitType) {
       }`,
       { unitType, groupBy: 'app_id', window: '30d' },
     );
-    console.log(JSON.stringify(report.llmUnitEconomics.rows, null, 2));
+    return report?.llmUnitEconomics?.rows || [];
   } catch (err) {
-    console.log(`Report not available yet (ledger aggregation may lag ingest): ${err.message}`);
+    console.log(`  (Report aggregation pending: ${err.message})`);
+    return [];
   }
 }
 
 async function main() {
   const suffix = runSuffix();
+  await seedRoiCalibration(suffix);
 
-  // --- Cost center: support automation -------------------------------
-  const supportAppId = `unit-economics-support-${suffix}`;
-  console.log(`Seeding an ROI calibration row for "${COST_CENTER_TRANSACTION_TYPE}" (illustrative, not customer-validated)...`);
-  const now = new Date();
-  const effectiveEnd = new Date(now);
-  effectiveEnd.setUTCFullYear(effectiveEnd.getUTCFullYear() + 1);
-  await graphql(
-    `mutation UpsertROI($input: UpsertROICalibrationInput!) { upsertROICalibration(input: $input) { id } }`,
-    {
-      input: {
-        transactionType: COST_CENTER_TRANSACTION_TYPE,
-        valuePerSuccessCents: 800,
-        preLlmBaselineCostCents: 350,
-        owner: 'cloptima-ai-gateway-examples',
-        effectiveStart: now.toISOString(),
-        effectiveEnd: effectiveEnd.toISOString(),
-      },
+  // Governance setup (needs CLOPTIMA_AI_ADMIN_KEY): platform admins normally create the policy,
+  // key, and binding once in the Console, Terraform, or CI.
+  const { virtualKey, appId } = await provisionApp({
+    app: 'unit-economics-demo',
+    policy: {
+      name: 'unit-economics-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
     },
-  );
-  console.log('ROI calibration seeded.');
-
-  console.log('Creating a policy + key and making a few real support-automation calls...');
-  const supportPolicy = await createPolicy({
-    name: `unit-economics-support-${suffix}`,
-    mode: 'enforce', budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'], allowedModels: [MODELS.default],
   });
-  const supportKey = await createVirtualKey({ name: `vk-unit-economics-support-${suffix}`, teamId: 'Support Automation', appId: supportAppId, environment: 'prod' });
-  await createBinding({ policyId: supportPolicy.id, teamId: 'Support Automation', appId: supportAppId, environment: 'prod', priority: 10, acknowledgeOverlap: true });
 
-  const supportClient = openaiStyleClient(supportKey.accessToken, config.baseUrl);
-  // The unit-metrics window is anchored to the calibration's own effective
-  // start, since the report only counts calibrated business value for the
-  // portion of the window the calibration was active for.
-  const supportWindowStart = now.toISOString();
-  const supportPrompts = [
-    'A customer says their invoice total looks wrong for this month. Draft a short reply asking for the invoice number.',
-    'A customer cannot log in after resetting their password. Draft a short reply with the next step.',
-    'A customer wants to know why their monthly bill increased. Draft a short reply.',
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  const client = openaiClient(virtualKey);
+
+  // --- Scenario 1: Support Automation (Cost Center) ---
+  console.log('\n--- Scenario 1: Support Automation (Cost Center) ---');
+  const supportTickets = [
+    { id: `${suffix}-sup-1`, query: 'How do I update the billing email address for my organization?' },
+    { id: `${suffix}-sup-2`, query: 'My API requests are failing with HTTP 401 unauthorized. Where do I get a new token?' },
   ];
-  let supportSuccessCount = 0;
-  for (const [i, prompt] of supportPrompts.entries()) {
-    const result = await callOpenAIStyle(supportClient, {
-      model: MODELS.default, prompt,
-      headers: attributionHeaders({
-        businessTransactionType: COST_CENTER_TRANSACTION_TYPE,
-        businessTransactionId: `${suffix}-support-${i}`,
-        businessTransactionUnitCount: 1,
-        businessOutcomeStatus: 'resolved',
-        businessOutcomeSuccess: true,
-        businessValueCents: 750,
-      }),
-      label: `support-ticket-${i + 1}`,
-    });
-    if (result.outcome === 'allowed') supportSuccessCount += 1;
-    console.log(`  [${result.outcome}] support-ticket-${i + 1}`);
+
+  const supportStart = new Date().toISOString();
+  let supportSuccesses = 0;
+
+  for (const [i, ticket] of supportTickets.entries()) {
+    try {
+      const response = await client.chat.completions.create(
+        {
+          model: MODELS.default,
+          messages: [
+            { role: 'system', content: 'You are an automated support resolution assistant. Answer concisely in one sentence.' },
+            { role: 'user', content: ticket.query },
+          ],
+        },
+        {
+          headers: attributionHeaders({
+            businessTransactionType: COST_CENTER_TYPE,
+            businessTransactionId: ticket.id,
+            businessTransactionUnitCount: 1,
+            businessOutcomeStatus: 'resolved',
+            businessOutcomeSuccess: true,
+            businessValueCents: 750,
+          }),
+        },
+      );
+
+      supportSuccesses += 1;
+      console.log(`[Ticket ${i + 1}] Resolved: ${ticket.query}`);
+      console.log(`Answer: ${response.choices[0]?.message?.content?.trim()}`);
+    } catch (err) {
+      console.error(`Ticket ${i + 1} failed:`, err?.message || err);
+    }
   }
 
-  console.log('\nSubmitting a unit-metrics batch for the support-automation window...');
   await submitUnitMetrics({
     unitType: 'support_answers',
-    unitCount: supportPrompts.length,
-    successCount: supportSuccessCount,
-    windowStart: supportWindowStart,
+    unitCount: supportTickets.length,
+    successCount: supportSuccesses,
+    windowStart: supportStart,
     windowEnd: new Date().toISOString(),
     teamId: 'Support Automation',
-    appId: supportAppId,
-    transactionType: COST_CENTER_TRANSACTION_TYPE,
+    appId,
+    transactionType: COST_CENTER_TYPE,
   });
+  console.log(`Submitted support unit metrics batch (${supportSuccesses}/${supportTickets.length} resolved).`);
 
-  // --- Profit center: checkout upsell agent ---------------------------
-  const upsellAppId = `unit-economics-upsell-${suffix}`;
-  console.log('\nCreating a policy + key and making a few real checkout-upsell calls...');
-  const upsellPolicy = await createPolicy({
-    name: `unit-economics-upsell-${suffix}`,
-    mode: 'enforce', budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'], allowedModels: [MODELS.default],
-  });
-  const upsellKey = await createVirtualKey({ name: `vk-unit-economics-upsell-${suffix}`, teamId: 'Checkout Upsell', appId: upsellAppId, environment: 'prod' });
-  await createBinding({ policyId: upsellPolicy.id, teamId: 'Checkout Upsell', appId: upsellAppId, environment: 'prod', priority: 10, acknowledgeOverlap: true });
-
-  const upsellClient = openaiStyleClient(upsellKey.accessToken, config.baseUrl);
-  const upsellWindowStart = new Date().toISOString();
+  // --- Scenario 2: E-Commerce Upsell (Profit Center) ---
+  console.log('\n--- Scenario 2: E-Commerce Upsell (Profit Center) ---');
   const upsells = [
-    { prompt: 'A customer just added running shoes to their cart. Write a one-sentence checkout upsell for moisture-wicking socks.', acceptedValueUsd: 12.99 },
-    { prompt: 'A customer just added a laptop to their cart. Write a one-sentence checkout upsell for a protective sleeve.', acceptedValueUsd: 24.99 },
-    { prompt: 'A customer just added a coffee maker to their cart. Write a one-sentence checkout upsell for a bag of specialty coffee beans.', acceptedValueUsd: 16.99 },
+    { item: 'Wireless Headphones', upsell: 'Protective Carrying Case', valueUsd: 19.99 },
+    { item: 'Espresso Machine', upsell: 'Organic Coffee Beans (1kg)', valueUsd: 24.50 },
   ];
-  let upsellSuccessCount = 0;
-  let acceptedRevenueUsd = 0;
-  for (const [i, { prompt, acceptedValueUsd }] of upsells.entries()) {
-    const result = await callOpenAIStyle(upsellClient, {
-      model: MODELS.default, prompt,
-      headers: attributionHeaders({
-        businessTransactionType: PROFIT_CENTER_TRANSACTION_TYPE,
-        businessTransactionId: `${suffix}-upsell-${i}`,
-        businessTransactionUnitCount: 1,
-        businessOutcomeStatus: 'accepted',
-        businessOutcomeSuccess: true,
-        businessValueCents: Math.round(acceptedValueUsd * 100),
-      }),
-      label: `checkout-upsell-${i + 1}`,
-    });
-    if (result.outcome === 'allowed') {
-      upsellSuccessCount += 1;
-      acceptedRevenueUsd += acceptedValueUsd;
+
+  const upsellStart = new Date().toISOString();
+  let totalRevenueUsd = 0;
+  let upsellSuccesses = 0;
+
+  for (const [i, item] of upsells.entries()) {
+    try {
+      const response = await client.chat.completions.create(
+        {
+          model: MODELS.default,
+          messages: [
+            { role: 'system', content: 'Generate a short 1-sentence checkout upsell recommendation.' },
+            { role: 'user', content: `Customer bought: ${item.item}. Suggest: ${item.upsell}.` },
+          ],
+        },
+        {
+          headers: attributionHeaders({
+            businessTransactionType: PROFIT_CENTER_TYPE,
+            businessTransactionId: `${suffix}-upsell-${i + 1}`,
+            businessTransactionUnitCount: 1,
+            businessOutcomeStatus: 'accepted',
+            businessOutcomeSuccess: true,
+            businessValueCents: Math.round(item.valueUsd * 100),
+          }),
+        },
+      );
+
+      upsellSuccesses += 1;
+      totalRevenueUsd += item.valueUsd;
+      console.log(`[Upsell ${i + 1}] Item: ${item.item} -> Suggested: ${item.upsell} (Value: $${item.valueUsd})`);
+      console.log(`Pitch: ${response.choices[0]?.message?.content?.trim()}`);
+    } catch (err) {
+      console.error(`Upsell ${i + 1} failed:`, err?.message || err);
     }
-    console.log(`  [${result.outcome}] checkout-upsell-${i + 1} ($${acceptedValueUsd.toFixed(2)} if accepted)`);
   }
 
-  console.log('\nSubmitting a unit-metrics batch for the checkout-upsell window, with the real revenue those accepted upsells booked...');
   await submitUnitMetrics({
     unitType: 'checkout_upsells',
     unitCount: upsells.length,
-    successCount: upsellSuccessCount,
-    windowStart: upsellWindowStart,
+    successCount: upsellSuccesses,
+    windowStart: upsellStart,
     windowEnd: new Date().toISOString(),
-    teamId: 'Checkout Upsell',
-    appId: upsellAppId,
-    transactionType: PROFIT_CENTER_TRANSACTION_TYPE,
-    revenueUsd: acceptedRevenueUsd,
+    teamId: 'Growth Engineering',
+    appId,
+    transactionType: PROFIT_CENTER_TYPE,
+    revenueUsd: totalRevenueUsd,
   });
+  console.log(`Submitted upsell unit metrics batch ($${totalRevenueUsd.toFixed(2)} booked revenue).`);
 
-  console.log('\nReading back the cost-center report (support automation - value shows up as calibrated ROI, not margin)...');
-  await readUnitEconomics('support_answers');
+  // --- Unit Economics & ROI Reporting ---
+  console.log('\n--- Cloptima Unit Economics & ROI Reports ---');
+  const supportReport = await fetchUnitEconomicsReport('support_answers');
+  if (supportReport.length > 0) {
+    console.log('Support Automation (Cost Avoidance / Net ROI):', JSON.stringify(supportReport, null, 2));
+  } else {
+    console.log('Support Automation metrics recorded. View aggregated ROI cards in Cloptima Economics tab.');
+  }
 
-  console.log('\nReading back the profit-center report (checkout upsell - value shows up as a positive margin from real revenue)...');
-  await readUnitEconomics('checkout_upsells');
-
-  console.log(`\nEvidence: Economics tab (${CONSOLE.unitEconomics}) shows both apps side by side - cost-per-unit, margin, and net-ROI, grouped by app.`);
+  const upsellReport = await fetchUnitEconomicsReport('checkout_upsells');
+  if (upsellReport.length > 0) {
+    console.log('Checkout Upsell (Direct Revenue / Gross Margin):', JSON.stringify(upsellReport, null, 2));
+  } else {
+    console.log('Checkout Upsell metrics recorded. View gross margin cards in Cloptima Economics tab.');
+  }
 }
 
 main().catch((err) => {
-  console.error('unit-economics-roi failed:', err);
+  console.error('unit-economics-roi execution failed:', err.message);
   process.exitCode = 1;
 });

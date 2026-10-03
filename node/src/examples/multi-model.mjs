@@ -1,77 +1,74 @@
-// One policy allowlisting several Vertex AI Gemini model variants (default
-// flash-lite and higher-performance flash variants), mints a key,
-// and calls each once - the "one policy, several models, compare cost and
-// latency" story. These examples are built with Gemini models; bring your
-// own credentials for other providers/models via the byok example.
-//
-// A model here can fail for two very different reasons, and this script
-// reports which one happened rather than treating any non-200 as the same
-// kind of failure:
-//   - policy/model block (403)  -> the model isn't allowed by this policy
-//   - missing pricing (402/403) -> the model is allowed, but the gateway's
-//     pricing catalog doesn't have a cost entry for it yet, so a spend-
-//     limited path fails closed. That's a pricing-catalog gap, not a sign
-//     the model itself is unsupported.
-//
-// Run standalone:
-//   node src/examples/multi-model.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
-import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { callOpenAIStyle } from '../lib/callGateway.mjs';
-import { confirmAllowed } from '../lib/confirm.mjs';
-import { MODELS, OTHER_GEMINI_MODELS } from '../lib/models.mjs';
+/**
+ * Multi-Model Gateway: Switching and Comparing Models
+ *
+ * Demonstrates how a single Cloptima virtual key and standard OpenAI client
+ * can seamlessly dispatch across different model tiers under one unified policy.
+ *
+ * Pattern:
+ * 1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
+ * 2. Dispatch identical prompts to multiple model tiers (e.g. Flash Lite vs Flash).
+ * 3. Compare latency, token consumption, and response quality.
+ *
+ * Run standalone:
+ *   node src/examples/multi-model.mjs
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { getAccess } from '../lib/access.mjs';
+import { MODELS } from '../lib/models.mjs';
+import { CONSOLE } from '../lib/config.mjs';
 
 async function main() {
-  const suffix = runSuffix();
-  const appId = `multi-model-${suffix}`;
-  const models = Array.from(new Set([MODELS.default, ...Object.values(OTHER_GEMINI_MODELS)]));
+  console.log('=== Multi-Model Gateway: Unified Model Comparison ===\n');
 
-  console.log(`Creating policy allowlisting ${models.length} Vertex AI Gemini model variants...`);
-  const policy = await createPolicy({
-    name: `multi-model-${suffix}`,
-    mode: 'enforce',
-    budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'],
-    allowedModels: models,
+  // Governance setup: the policy this application runs under. Platform admins normally
+  //    create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+  //    points at a key whose policy already matches.
+  const access = await getAccess({
+    app: 'multi-model-demo',
+    policy: {
+      name: 'multi-model-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default, MODELS.premium], // both models are allowlisted under one policy
+    },
   });
-  console.log(`  policy ${policy.name} -> ${policy.id}`);
 
-  const key = await createVirtualKey({ name: `vk-multi-model-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
-  await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log(`Minted key ${key.id}, bound. Calling each model once...\n`);
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  const client = openaiClient(access.virtualKey);
 
-  // 2. Your application code - the official OpenAI SDK, unchanged.
-  const client = openaiStyleClient(key.accessToken, config.baseUrl);
-  const results = [];
-  for (const model of models) {
-    const result = await callOpenAIStyle(client, {
-      model,
-      prompt: 'In one short sentence, name the model you are.',
-      label: model,
-    });
-    results.push(result);
-    const note = result.outcome === 'allowed'
-      ? `text="${(result.text || '').slice(0, 80)}"`
-      : `status=${result.status} reason=${JSON.stringify(result.reason).slice(0, 200)}`;
-    console.log(`  [${result.outcome}] ${model} - ${note}`);
+  const modelsToCompare = [MODELS.default, MODELS.premium];
+
+  const testPrompt = 'Explain the difference between vertical and horizontal autoscaling in 2 sentences.';
+  console.log(`Evaluating prompt across ${modelsToCompare.length} models:\n"${testPrompt}"\n`);
+
+  for (const model of modelsToCompare) {
+    console.log(`--- Model: ${model} ---`);
+    const start = Date.now();
+
+    try {
+      const completion = await client.chat.completions.create({
+        model,
+        messages: [{ role: 'user', content: testPrompt }],
+      });
+
+      const elapsedMs = Date.now() - start;
+      const content = completion.choices[0]?.message?.content?.trim() || '';
+      const usage = completion.usage;
+
+      console.log(`Assistant: ${content}`);
+      console.log(`Metrics: ${elapsedMs}ms latency | ${usage?.total_tokens} tokens (${usage?.prompt_tokens} in / ${usage?.completion_tokens} out)\n`);
+    } catch (err) {
+      console.log(`Error calling ${model}: ${err.message}\n`);
+    }
   }
 
-  // 3. What the gateway did. Every model listed in allowedModels must be served.
-  for (const result of results) {
-    confirmAllowed(result, `allowedModels includes ${result.label}`);
-  }
-  console.log(`\nConfirmed: all ${results.length} allowlisted models served under one policy.`);
-  console.log(
-    '\nIf any model above came back blocked with a pricing-related reason rather than a policy/model-allow ' +
-    'reason, that means the model is real and allowlisted but the gateway pricing catalog needs a cost entry ' +
-    'for it before spend-limited calls can succeed - check the pricing catalog/overlay, not the policy.',
-  );
-  console.log(`\nEvidence: Explorer tab (${CONSOLE.spend}) - filter by app "${appId}" to compare cost and latency across every model called above.`);
-  console.log(JSON.stringify(results, null, 2));
+  console.log(`Compare aggregate cost and latency per model in the Cloptima Console:`);
+  console.log(`  - Explorer: ${CONSOLE.spend}`);
+  console.log(`  - Recommendations: ${CONSOLE.recommendations}`);
 }
 
 main().catch((err) => {
-  console.error('multi-model failed:', err);
+  console.error('Example failed:', err.message);
   process.exitCode = 1;
 });

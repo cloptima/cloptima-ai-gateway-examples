@@ -1,77 +1,70 @@
-"""One policy allowlisting several Vertex AI Gemini model variants (default
-flash-lite and higher-performance flash variants), mints a key, and
-calls each once - the "one policy, several models, compare cost and latency"
-story. These examples are built with Gemini models; bring your own
-credentials for other providers/models via the byok example.
+"""Multi-Model Gateway: Switching and Comparing Models
 
-A model here can fail for two very different reasons, and this script
-reports which one happened rather than treating any non-200 as the same
-kind of failure:
-  - policy/model block (403)  -> the model isn't allowed by this policy
-  - missing pricing (402/403) -> the model is allowed, but the gateway's
-    pricing catalog doesn't have a cost entry for it yet, so a spend-limited
-    path fails closed. That's a pricing-catalog gap, not a sign the model
-    itself is unsupported.
+Demonstrates how a single Cloptima virtual key and standard OpenAI client
+can seamlessly dispatch across different model tiers under one unified policy.
 
-Run standalone from python/:
-    python -m examples.multi_model
+Pattern:
+1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
+2. Dispatch identical prompts to multiple model tiers (e.g. Flash Lite vs Flash).
+3. Compare latency, token consumption, and response quality.
+
+Run standalone:
+  python -m examples.multi_model
 """
+import time
 
-import json
-
-from lib import config
-from lib.confirm import confirm_allowed
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key
-from lib.gateway_clients import openai_style_client
-from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT, OTHER_GEMINI_MODELS
+from lib.access import get_access
+from lib.client import openai_client
+from lib.config import CONSOLE
+from lib.models import MODELS
 
 
-def main():
-    suffix = config.run_suffix()
-    app_id = f"multi-model-{suffix}"
-    models = list(dict.fromkeys([MODEL_DEFAULT, *OTHER_GEMINI_MODELS.values()]))
+def main() -> None:
+    print("=== Multi-Model Gateway: Unified Model Comparison ===\n")
 
-    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
-    print(f"Creating policy allowlisting {len(models)} Vertex AI Gemini model variants...")
-    policy = create_policy({
-        "name": f"multi-model-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": models,
-    })
-    print(f"  policy {policy['name']} -> {policy['id']}")
-
-    key = create_virtual_key({"name": f"vk-multi-model-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
-    create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print(f"Minted key {key['id']}, bound. Calling each model once...\n")
-
-    # 2. Your application code - the official OpenAI SDK, unchanged.
-    client = openai_style_client(key["accessToken"], config.BASE_URL)
-    results = []
-    for model in models:
-        result = call_openai_style(
-            client, model,
-            "In one short sentence, name the model you are.",
-            model,
-        )
-        results.append(result)
-        if result["outcome"] == "allowed":
-            note = f"text=\"{(result.get('text') or '')[:80]}\""
-        else:
-            note = f"status={result.get('status')} reason={str(result.get('reason'))[:200]}"
-        print(f"  [{result['outcome']}] {model} - {note}")
-
-    # 3. What the gateway did. Every model listed in allowedModels must be served.
-    for result in results:
-        confirm_allowed(result, f"allowedModels includes {result['label']}")
-    print(f"\nConfirmed: all {len(results)} allowlisted models served under one policy.")
-    print(
-        "\nIf any model above came back blocked with a pricing-related reason rather than a policy/model-allow "
-        "reason, that means the model is real and allowlisted but the gateway pricing catalog needs a cost entry "
-        "for it before spend-limited calls can succeed - check the pricing catalog/overlay, not the policy."
+    # Governance setup: the policy this application runs under. Platform admins normally
+    # create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+    # points at a key whose policy already matches.
+    access = get_access(
+        app="multi-model-demo",
+        policy={
+            "name": "multi-model-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"], MODELS["premium"]],
+        },
     )
-    print(f"\nEvidence: Explorer tab ({config.CONSOLE['spend']}) - filter by app \"{app_id}\" to compare cost and latency across every model called above.")
-    print(json.dumps(results, indent=2, default=str))
+
+    # Application code: the official SDK, pointed at the gateway with a virtual key.
+    client = openai_client(access["virtual_key"])
+
+    models_to_compare = [MODELS["default"], MODELS["premium"]]
+    test_prompt = "Explain the difference between vertical and horizontal autoscaling in 2 sentences."
+    print(f'Evaluating prompt across {len(models_to_compare)} models:\n"{test_prompt}"\n')
+
+    for model in models_to_compare:
+        print(f"--- Model: {model} ---")
+        start = time.time()
+
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": test_prompt}],
+            )
+            elapsed_ms = int((time.time() - start) * 1000)
+            content = completion.choices[0].message.content or ""
+            usage = completion.usage
+
+            print(f"Assistant: {content.strip()}")
+            if usage:
+                print(f"Metrics: {elapsed_ms}ms latency | {usage.total_tokens} tokens ({usage.prompt_tokens} in / {usage.completion_tokens} out)\n")
+        except Exception as err:
+            print(f"Error calling {model}: {err}\n")
+
+    print("Compare aggregate cost and latency per model in the Cloptima Console:")
+    print(f"  - Explorer: {CONSOLE['spend']}")
+    print(f"  - Recommendations: {CONSOLE['recommendations']}")
 
 
 if __name__ == "__main__":

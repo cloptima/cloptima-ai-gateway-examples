@@ -1,87 +1,142 @@
 # Cloptima AI gateway examples (Python)
 
-Each script in `examples/` is independent and self-contained: it creates its own policy, virtual key, and binding using the official `openai` and `anthropic` packages - no Cloptima-specific SDK required for inference - then runs its scenario and prints what happened. Run any single one in isolation; none of them depend on another having run first.
+Examples showing how to integrate Python applications with Cloptima's managed AI gateway using the official `openai` and `anthropic` SDKs, and how your code behaves when governance controls apply.
 
-## Setup
+## Integrating in two lines
 
-Requires **Python 3.9+** and pip:
+Swap your provider API key for a Cloptima virtual key and point the base URL at the gateway:
+
+### OpenAI SDK
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["CLOPTIMA_VIRTUAL_KEY"],
+    base_url="https://api.cloptima.ai/v1/ai",  # the SDK appends /chat/completions
+)
+
+response = client.chat.completions.create(
+    model="vertex_ai/gemini-3.5-flash-lite",
+    messages=[{"role": "user", "content": "Hello Cloptima!"}],
+)
+```
+
+### Anthropic SDK
+
+```python
+import os
+from anthropic import Anthropic
+
+client = Anthropic(
+    api_key=os.environ["CLOPTIMA_VIRTUAL_KEY"],
+    base_url="https://api.cloptima.ai",  # the SDK appends /v1/messages
+)
+
+response = client.messages.create(
+    model="vertex_ai/gemini-3.5-flash-lite",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello Cloptima!"}],
+)
+```
+
+## How each example is organized
+
+Every file in `examples/` has two parts:
+
+1. **Governance setup.** The policy (and any guardrail profile, tool server, or price sheet) the scenario runs under, written inline with its real configuration. Platform teams normally create these once in the Console, Terraform, or CI.
+2. **Application code.** What your service does: make calls, handle blocks, and read results. This is the part to copy into your own code.
+
+## Run an example
+
+Requires Python 3.9+ and pip.
 
 ```bash
-python3 --version # verify Python 3.9+ is active
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in CLOPTIMA_AI_ADMIN_KEY
+cp .env.example .env
+python -m examples.quickstart_openai
 ```
 
-Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for a suggested 7-script run order.
+Set one credential in `.env`:
+
+- `CLOPTIMA_AI_ADMIN_KEY`: the example runs its governance setup for you, then runs the application code. Works with every example.
+- `CLOPTIMA_VIRTUAL_KEY`: the example skips setup and runs only the application code with your key. Use it with the examples marked **Virtual key** below. The key must be bound to a policy like the one in the file's governance setup, or the scenario will not trigger.
+
+Some examples need more: `byok` and `contract_pricing` need `PROVIDER_API_KEY` (or `CLOPTIMA_PROVIDER_CREDENTIAL_ID`), and the managed guardrail examples need available managed credits.
+
+## Handling gateway responses
+
+When a control applies, the gateway returns a standard HTTP error that the SDK raises as an API error:
+
+```json
+{
+  "error": "Request blocked by policy",
+  "reason": "guardrail_violation",
+  "violations": ["us_ssn"]
+}
+```
+
+The standard OpenAI Python SDK parses error responses into `err.body`, but drops `reason` and `violations` by default if not nested. To make `reason` and `violations` available in `except APIStatusError` blocks, initialize the client using the helper in `lib/client.py` (which attaches a transparent `httpx` transport):
+
+```python
+from openai import APIStatusError
+from lib.client import openai_client
+
+client = openai_client(os.environ["CLOPTIMA_VIRTUAL_KEY"])
+
+try:
+    client.chat.completions.create(...)
+except APIStatusError as err:
+    if err.status_code == 403:
+        body = err.body if isinstance(err.body, dict) else {}
+        print("Reason:", body.get("reason"))
+        print("Violations:", body.get("violations"))
+```
+
+| Status | Typical cause | What your application does |
+| --- | --- | --- |
+| **402** | Budget limit exhausted (`gateway_daily_budget_exceeded` or spend limit). | Stop non-critical requests or alert FinOps. |
+| **403** | A guardrail, provider or model allowlist, tool allowlist, or loop cap blocked the request. `violations` lists the reasons. | Show a safe message to the user, fall back to an approved model, or stop the agent. |
+| **429** | Request rate limit exceeded. | Back off and retry with exponential backoff. |
+| **400** | Required attribution (team, app) is missing, or a request parameter is invalid. | Add the attribution headers or correct the request. |
 
 ## Examples
 
-Run any of these from the `python/` directory:
+| Command | Auth | Scenario |
+| --- | --- | --- |
+| `python -m examples.quickstart_openai` | Virtual key | Chat completion and streaming with the OpenAI SDK. |
+| `python -m examples.quickstart_anthropic` | Virtual key | Messages and streaming with the Anthropic SDK. |
+| `python -m examples.multi_model` | Virtual key | Compare latency and token cost across models under one policy. |
+| `python -m examples.pii_guardrail` | Virtual key | Support bot blocks an SSN before it reaches the model and returns a friendly fallback. |
+| `python -m examples.provider_deny` | Virtual key | Compliance policy blocks a non-approved provider; the app falls back to an approved model. |
+| `python -m examples.rate_limit` | Virtual key | Batch worker retries with exponential backoff on HTTP 429. |
+| `python -m examples.token_limit` | Virtual key | Summarization service handles an output-token cap. |
+| `python -m examples.budget_limit` | Virtual key | Job stops non-critical work when the daily budget is reached. |
+| `python -m examples.agentic_runaway` | Virtual key | Agent loop is stopped by the policy's loop-iteration and tool-retry caps. |
+| `python -m examples.exact_semantic_cache` | Virtual key | Latency and token savings from exact and semantic cache hits. |
+| `python -m examples.conversation_prompt_caching` | Virtual key | Provider prompt caching on a growing multi-turn conversation (OpenAI and Anthropic). |
+| `python -m examples.adaptive_routing` | Virtual key | Adaptive routing in observe mode across cheap, balanced, and strong model tiers. |
+| `python -m examples.guardrail_cost_governance` | Virtual key | Per-request cost cap on a managed guardrail scan. |
+| `python -m examples.metadata_deny` | Virtual key | Requests without team and app attribution are refused; attributed requests are admitted. With `CLOPTIMA_VIRTUAL_KEY`, use an unscoped key (no team or app baked in) bound to a policy that requires attribution. |
+| `python -m examples.guardrail_detector_categories` | Virtual key | One managed guardrail scan per run: Google Model Armor (default), Azure AI Content Safety, or Amazon Bedrock Guardrails. Choose with `GUARDRAIL_PROVIDER=google-model-armor\|azure-content-safety\|bedrock-guardrails`. |
+| `python -m examples.byok` | Virtual key + `CLOPTIMA_PROVIDER_CREDENTIAL_ID`, or admin key + `PROVIDER_API_KEY` | Route calls through your own provider credential. |
+| `python -m examples.semantic_cache_enforce` | Admin key | Enforce-mode semantic cache, including the class approval it needs. |
+| `python -m examples.unit_economics_roi` | Admin key | Cost-center and profit-center ROI from business-outcome headers and unit metrics. |
+| `python -m examples.contract_pricing` | Admin key + `PROVIDER_API_KEY` or `CLOPTIMA_PROVIDER_CREDENTIAL_ID` | Negotiated rate sheet versus retail cost on your own credentials. |
+| `python -m examples.approval_workflow` | Admin key | Budget-change request waits in the governance queue; a pre-authorized change applies immediately. |
+| `python -m examples.prompt_release_workflow` | Admin key | Prompt evaluation against a golden dataset and a quality-gated release. |
+| `python -m examples.mcp_tool_governance` | Admin key | Tool servers start disabled until reviewed; unregistered servers and disallowed tools are blocked. |
+| `python -m examples.session_trace_audit` | Admin key | Agent session with tool I/O capture and per-step integrity hashes (`traceSha256`). |
+| `python -m examples.cleanup` | Admin key | Delete the policies, keys, profiles, and datasets the examples created. |
 
-| Command | What it shows |
-| --- | --- |
-| `python -m examples.quickstart_openai` | Simplest working call, using the OpenAI SDK. |
-| `python -m examples.quickstart_anthropic` | Same, using the Anthropic SDK's own calling convention. |
-| `python -m examples.multi_model` | One policy allowlisting several Vertex AI Gemini model variants, called through it to compare cost and latency. |
-| `python -m examples.rate_limit` | A realistic per-minute request cap tripping after several calls. |
-| `python -m examples.token_limit` | A realistic output-token cap blocking a too-long request pre-flight. |
-| `python -m examples.budget_limit` | A small daily spend cap admitting several calls, then denying the rest. |
-| `python -m examples.agentic_runaway` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
-| `python -m examples.pii_guardrail` | A profile custom rule blocks a fictional SSN format before model egress. |
-| `python -m examples.exact_semantic_cache` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
-| `python -m examples.conversation_prompt_caching` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
-| `python -m examples.provider_deny` | A non-Vertex model request blocked by a Vertex-only policy. |
-| `python -m examples.metadata_deny` | A deliberately unscoped key with no attribution headers, blocked. |
-| `python -m examples.byok` | Bring your own provider credential and route it through Cloptima's governance layer (needs `PROVIDER_API_KEY` in `.env`). |
-| `python -m examples.unit_economics_roi` | A cost-center agent (ROI vs. a pre-LLM baseline) and a profit-center agent (real booked revenue) side by side, each with its own computed report. |
-| `python -m examples.contract_pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
-| `python -m examples.semantic_cache_enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
-| `python -m examples.approval_workflow` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
-| `python -m examples.guardrail_detector_categories` | Creates isolated policy-bound profiles and exercises Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails (requires available managed credits). |
-| `python -m examples.guardrail_cost_governance` | Sets a per-request scan cost cap in a provider-backed guardrail profile (requires available managed credits). |
-| `python -m examples.adaptive_routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
-| `python -m examples.prompt_release_workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
-| `python -m examples.mcp_tool_governance` | MCP server registration, approval rules, tool-definition review, and blocked server/tool checks. |
-| `python -m examples.session_trace_audit` | Tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification. |
-| `python -m examples.cleanup` | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, datasets, and ROI calibrations; archive prompt templates and price sheets; revoke keys and credentials; reject pending approvals. |
+## Cleanup
 
-Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - change the constant near the top of any script and re-run it.
-
-## Resetting Resources & Account Quotas
-
-Each example script provisions its own policy, virtual key, and binding on the fly. Running multiple scripts will consume quotas on your account (such as maximum policies or active keys). If you hit account limit errors during an evaluation tour, or want to clean up afterward, run:
+Each run creates a policy, a virtual key, and a binding. To remove what the examples created:
 
 ```bash
-python -m examples.cleanup
+python -m examples.cleanup             # asks for confirmation
+python -m examples.cleanup --force     # no prompt
 ```
-
-In automated or CI environments, pass `--force` to bypass the interactive confirmation:
-
-```bash
-python -m examples.cleanup --force
-```
-
-> [!WARNING]
-> **Account-Wide Cleanup**: This script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, eval datasets, and ROI calibrations; archives **all** prompt templates and price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the current account. Run only in sandbox or test accounts, never against production environments.
-
-## How the gateway calls work
-
-- The gateway URL is already built into `lib/config.py` - you don't need to know or set it.
-- OpenAI-style client points at `<gateway>/v1/ai` (the SDK appends `/chat/completions`).
-- Anthropic-style client points at the gateway root (the SDK appends `/v1/messages`).
-- Both send the virtual key as their normal API key - no custom auth code needed.
-- Supported managed-gateway attribution rides as `x-cloptima-*` request headers via `extra_headers`; telemetry-only dimensions are listed separately in `../docs/ENVIRONMENT.md`.
-- There is no client-side cache toggle - exact/semantic caching is entirely policy-driven server-side (see `../docs/CACHE_AND_POLICY.md`).
-- Policy/key/binding creation goes through the public `createLLMGatewayPolicy` / `createLLMGatewayKey` / `createLLMGatewayPolicyBinding` GraphQL mutations - see `lib/gateway_admin.py`.
-
-## How each script is laid out
-
-Every example follows the same three steps, so you can read any of them top to bottom:
-
-1. **Cloptima setup** - create the policy, virtual key, and binding. Together these are the entire contract; nothing later asks the gateway to enforce anything.
-2. **Your application code** - the official `openai` or `anthropic` client, called exactly as you would call it without Cloptima.
-3. **What the gateway did** - print the outcome, then confirm it against what the policy in step 1 configured (`lib/confirm.py`).
-
-That last step is a real check, not narration: if a limit, guardrail, or scope did not hold, the script exits non-zero with a message naming the control that failed, so a run can never report a governance guarantee it did not get.

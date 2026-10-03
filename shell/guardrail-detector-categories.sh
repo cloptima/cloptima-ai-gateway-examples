@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Creates an isolated policy-bound profile for each managed provider scan.
+# Demonstrates integrating managed third-party guardrail providers (Google Model Armor,
+# Azure AI Content Safety, Amazon Bedrock Guardrails) through Cloptima-managed credentials.
 # Each scan is billable and requires available Cloptima managed credits.
+#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the profile, policy, and key). See .env.example.
 # Run standalone: ./guardrail-detector-categories.sh
+# Choose a provider with GUARDRAIL_PROVIDER (default google-model-armor):
+#   GUARDRAIL_PROVIDER=azure-content-safety ./guardrail-detector-categories.sh
+#   GUARDRAIL_PROVIDER=bedrock-guardrails ./guardrail-detector-categories.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,70 +17,72 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
-SUFFIX="$(run_suffix)"
+GUARDRAIL_PROVIDER="${GUARDRAIL_PROVIDER:-google-model-armor}"
 
-profile_input() {
-  local name="$1" integration="$2"
-  jq -n --arg name "$name" --argjson integration "$integration" \
-    '{name: $name, description: "Managed provider scan validation example", definition: {
-      input: {action: "observe", detectors: {secret: {}}},
-      output: {action: "observe", detectors: {secret: {}}},
-      provider_integration: $integration}}'
-}
+case "$GUARDRAIL_PROVIDER" in
+  azure-content-safety)
+    PROVIDER_NAME="Azure AI Content Safety"
+    INTEGRATION='{"kind":"azure_content_safety","credential_source":"cloptima_managed","prompt_shields_enabled":true,"harm_categories":["Hate","Violence"],"scan_directions":"input"}'
+    ;;
+  bedrock-guardrails)
+    PROVIDER_NAME="Amazon Bedrock Guardrails"
+    INTEGRATION='{"kind":"bedrock_guardrails","credential_source":"cloptima_managed","scan_directions":"input"}'
+    ;;
+  google-model-armor)
+    PROVIDER_NAME="Google Model Armor"
+    INTEGRATION='{"kind":"google_model_armor","credential_source":"cloptima_managed","scan_directions":"input"}'
+    ;;
+  *)
+    echo "Unknown GUARDRAIL_PROVIDER \"$GUARDRAIL_PROVIDER\". Use one of: google-model-armor, azure-content-safety, bedrock-guardrails." >&2
+    exit 1
+    ;;
+esac
 
-echo "Creating one fail-closed profile and policy per managed scan provider..."
-echo "Prerequisite: the account must have managed credits available for billable guardrail scans."
+echo "=== Multi-Provider Managed Guardrail Evaluation ==="
+echo "Prerequisite: The account must have managed credits available for billable guardrail scans."
+echo "Active Provider Integration: $PROVIDER_NAME"
+echo ""
 
-run_provider() {
-  local provider_id="$1" name="$2" integration="$3" retain="$4"
-  local resource_name profile profile_id policy policy_id key key_id access_token binding binding_id
-  resource_name="guardrail-$provider_id-$SUFFIX"
-  profile=$(create_guardrail_profile "$(profile_input "$resource_name" "$integration")")
-  profile_id=$(jq -r '.id' <<<"$profile")
-  policy=$(create_policy "$(jq -n --arg name "$resource_name" --arg model "$MODEL_DEFAULT" --arg profileId "$profile_id" \
-    '{name: $name, mode: "enforce", budgetMode: "hard_fast", failMode: "fail_closed", allowedProviders: ["vertex_ai"], allowedModels: [$model], guardrailProfileId: $profileId}')")
-  policy_id=$(jq -r '.id' <<<"$policy")
-  key=$(create_virtual_key "$(jq -n --arg name "vk-$resource_name" --arg appId "$resource_name" \
-    '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-  key_id=$(jq -r '.id' <<<"$key")
-  access_token=$(jq -r '.accessToken' <<<"$key")
-  binding=$(create_binding "$(jq -n --arg policyId "$policy_id" --arg appId "$resource_name" \
-    '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')")
-  binding_id=$(jq -r '.id' <<<"$binding")
-  call_chat "$access_token" "$MODEL_DEFAULT" "Reply with exactly: guardrail scan passed." "$name"
-  if [ "$LAST_OUTCOME" != "allowed" ]; then
-    echo "  reason: $(jq -r '.error.message // .error // .message // "No response detail"' "$RESP_BODY_FILE")"
-    FAILURES+=("$name (HTTP $LAST_HTTP_CODE)")
-  else
-    if [ "$retain" = "true" ]; then
-      echo "  retained for review - profile: $profile_id; policy: $policy_id; app: $resource_name"
-    fi
-  fi
+PROFILE_JSON=$(jq -n --argjson integration "$INTEGRATION" '{
+  name: "managed-guardrail-profile",
+  description: "Managed provider scan integration example",
+  definition: {
+    input: {action: "observe", detectors: {secret: {}}},
+    output: {action: "observe", detectors: {secret: {}}},
+    provider_integration: $integration
+  }
+}')
 
-  if [ "$retain" = "false" ]; then
-    if ! graphql 'mutation($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }' "$(jq -n --arg id "$binding_id" '{id: $id}')" >/dev/null 2>&1; then
-      FAILURES+=("$name cleanup (binding)")
-    fi
-    if ! graphql 'mutation($id: ID!) { deleteLLMGatewayPolicy(id: $id) }' "$(jq -n --arg id "$policy_id" '{id: $id}')" >/dev/null 2>&1; then
-      FAILURES+=("$name cleanup (policy)")
-    fi
-    if ! graphql 'mutation($id: ID!) { deleteLLMGuardrailProfile(id: $id) }' "$(jq -n --arg id "$profile_id" '{id: $id}')" >/dev/null 2>&1; then
-      FAILURES+=("$name cleanup (profile)")
-    fi
-    if ! graphql 'mutation($id: ID!) { revokeLLMGatewayKey(id: $id) }' "$(jq -n --arg id "$key_id" '{id: $id}')" >/dev/null 2>&1; then
-      FAILURES+=("$name cleanup (key)")
-    fi
-  fi
-}
+POLICY_JSON=$(jq -n --arg model "$MODEL_DEFAULT" '{
+  name: "managed-guardrail-policy",
+  mode: "enforce",
+  budgetMode: "hard_fast",
+  failMode: "fail_closed",
+  allowedProviders: ["vertex_ai"],
+  allowedModels: [$model]
+}')
 
-FAILURES=()
-run_provider "google-model-armor" "Google Model Armor" '{"kind":"google_model_armor","credential_source":"cloptima_managed","scan_directions":"input"}' false
-run_provider "azure-content-safety" "Azure AI Content Safety" '{"kind":"azure_content_safety","credential_source":"cloptima_managed","prompt_shields_enabled":true,"harm_categories":["Hate","Violence"],"scan_directions":"input"}' false
-run_provider "bedrock-guardrails" "Amazon Bedrock Guardrails" '{"kind":"bedrock_guardrails","credential_source":"cloptima_managed","scan_directions":"input"}' true
+get_access "guardrail-$GUARDRAIL_PROVIDER-demo" "$POLICY_JSON" "$PROFILE_JSON"
 
-if [ "${#FAILURES[@]}" -gt 0 ]; then
-  printf 'Provider checks failed: %s\n' "${FAILURES[*]}" >&2
-  exit 1
+echo "Sending request through guarded route (pre-flight scan active)..."
+HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code}' -X POST "$BASE_URL/v1/ai/chat/completions" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: $USER_AGENT" \
+  -d "$(jq -n --arg model "$MODEL_DEFAULT" '{model: $model, messages: [{role: "user", content: "Confirm this request passed safety scan."}]}')")
+
+if [ "$HTTP_CODE" = "200" ]; then
+  echo "  ✓ Scan completed & response served: $(jq -r '.choices[0].message.content' "$RESP_BODY_FILE")"
+  echo "  Tokens: $(jq -r '.usage.total_tokens' "$RESP_BODY_FILE") | Request ID: $(jq -r '.id' "$RESP_BODY_FILE")"
+elif [ "$HTTP_CODE" = "403" ]; then
+  echo "  🛡️ Gateway Security Block (HTTP 403)"
+  describe_block
+else
+  echo "  Request returned unexpected HTTP $HTTP_CODE"
+  describe_block
 fi
-echo "All three isolated managed provider scans completed successfully."
-echo "Review policy and request records in the console: $CONSOLE_POLICIES and $CONSOLE_AUDIT"
+
+echo ""
+echo "Review guardrail scan events in the Cloptima Console:"
+echo "  - Audit Trail: $CONSOLE_AUDIT"
+echo "  - Policies: $CONSOLE_POLICIES"

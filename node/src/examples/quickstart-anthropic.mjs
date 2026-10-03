@@ -1,55 +1,78 @@
-// Same idea as quickstart-openai.mjs, using the Anthropic SDK's own calling
-// convention instead - proves both API shapes work against the same gateway.
-// Run standalone:
-//   node src/examples/quickstart-anthropic.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
-import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { anthropicStyleClient } from '../lib/gatewayClients.mjs';
-import { callAnthropicStyle } from '../lib/callGateway.mjs';
-import { confirmAllowed } from '../lib/confirm.mjs';
+/**
+ * Quickstart: Connecting the Anthropic SDK to Cloptima AI Gateway
+ *
+ * Demonstrates standard Anthropic SDK integration:
+ * 1. Initialize the official Anthropic SDK with Cloptima's base URL and virtual key.
+ * 2. Send standard and streaming Messages requests through the gateway.
+ * 3. Inspect usage and request metadata.
+ *
+ * Run standalone:
+ *   node src/examples/quickstart-anthropic.mjs
+ */
+import Anthropic from '@anthropic-ai/sdk';
+import { getAccess } from '../lib/access.mjs';
 import { MODELS } from '../lib/models.mjs';
+import { CONSOLE, config } from '../lib/config.mjs';
 
 async function main() {
-  const suffix = runSuffix();
-  const appId = `quickstart-anthropic-${suffix}`;
+  console.log('=== Cloptima AI Gateway: Anthropic SDK Quickstart ===\n');
 
-  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
-  console.log(`Creating policy allowing ${MODELS.default} on the managed Vertex AI provider...`);
-  const policy = await createPolicy({
-    name: `quickstart-anthropic-${suffix}`,
-    mode: 'enforce',
-    budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'],
-    allowedModels: [MODELS.default],
+  // Governance setup: the policy this application runs under. Platform admins normally
+  //    create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+  //    points at a key whose policy already matches.
+  const access = await getAccess({
+    app: 'quickstart-demo',
+    policy: {
+      name: 'quickstart-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
+    },
   });
-  console.log(`  policy ${policy.name} -> ${policy.id}`);
 
-  console.log(`Minting a virtual key attributed to team Quickstart, app ${appId}...`);
-  const key = await createVirtualKey({
-    name: `vk-quickstart-anthropic-${suffix}`,
-    teamId: 'Quickstart', appId, environment: 'dev',
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  const client = new Anthropic({
+    apiKey: access.virtualKey,
+    baseURL: config.baseUrl, // the SDK appends /v1/messages
   });
-  console.log(`  key ${key.id}`);
 
-  console.log(`Binding the policy to app ${appId} - the gateway serves only requests a bound policy covers...`);
-  await createBinding({ policyId: policy.id, teamId: 'Quickstart', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log('Bound. Calling the gateway with the official Anthropic SDK...');
-
-  // 2. Your application code - the official Anthropic SDK, unchanged.
-  const client = anthropicStyleClient(key.accessToken, config.baseUrl);
-  const result = await callAnthropicStyle(client, {
+  // 1. Standard Messages API Call
+  console.log('--- 1. Standard Messages API Request ---');
+  const response = await client.messages.create({
     model: MODELS.default,
-    prompt: 'In one sentence, confirm this call went through Cloptima\'s managed AI gateway.',
-    label: 'quickstart-anthropic',
+    max_tokens: 300,
+    messages: [
+      { role: 'user', content: 'What are the main benefits of centralized LLM gateway governance?' },
+    ],
   });
 
-  // 3. What the gateway did.
-  console.log(`\n[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
-  confirmAllowed(result, 'quickstart call through a bound virtual key');
-  console.log(`\nEvidence: Explorer tab (${CONSOLE.spend}) - find this request_id to see attributed spend and usage.`);
+  const text = response.content?.[0]?.text || '';
+  console.log(`Assistant:\n  ${text.trim()}\n`);
+  console.log(`Tokens: ${response.usage?.input_tokens} input, ${response.usage?.output_tokens} output`);
+  console.log(`Request ID: ${response.id}\n`);
+
+  // 2. Streaming Messages Call
+  console.log('--- 2. Streaming Messages Request ---');
+  const stream = await client.messages.create({
+    model: MODELS.default,
+    max_tokens: 100,
+    messages: [{ role: 'user', content: 'List 3 cloud cost best practices briefly.' }],
+    stream: true,
+  });
+
+  process.stdout.write('Assistant: ');
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta?.text) {
+      process.stdout.write(event.delta.text);
+    }
+  }
+  console.log('\n');
+
+  console.log(`View live spend, latency, and attribution in the console: ${CONSOLE.spend}`);
 }
 
 main().catch((err) => {
-  console.error('quickstart-anthropic failed:', err);
+  console.error('Quickstart failed:', err.message);
   process.exitCode = 1;
 });

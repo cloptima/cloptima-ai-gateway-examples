@@ -12,6 +12,8 @@ from . import config
 
 
 def graphql(query: str, variables: dict) -> dict:
+    if not config.AI_ADMIN_KEY:
+        raise RuntimeError("This example creates governance resources and needs CLOPTIMA_AI_ADMIN_KEY. Add it to .env (see .env.example).")
     response = requests.post(
         f"{config.BASE_URL}/graphql",
         headers={

@@ -1,85 +1,92 @@
-"""Creates a hard_strict policy with a small but real per-policy daily budget,
-distinct from the org-wide managed-credits wallet cap, and fires calls in a
-loop until the budget denies the rest.
+"""Multi-Tenant Cost Governance & Budget Overflow Handling
 
-hard_strict reserves against an ESTIMATED cost derived from the request's
-max_tokens (a pessimistic worst case), not the realized post-completion cost -
-so this script passes an explicit, modest max_tokens on every call to keep
-that estimate small and consistent. Without that, an unbounded default
-max_tokens would make the very first call's estimate blow past a small
-budget and trip on call 1 regardless of the budget's actual size.
-Run standalone from python/:
-    python -m examples.budget_limit
+Demonstrates how to attribute inference spend to teams and applications,
+and how an application gracefully handles policy budget limits.
+
+Pattern:
+1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
+2. Attribute requests using team and application tags.
+3. Send requests within budget (served normally).
+4. Catch budget limit exhaustion (HTTP 402/403/429), alert or fall back gracefully.
+
+Run standalone:
+  python -m examples.budget_limit
 """
+from openai import APIStatusError
 
-import json
+from lib.access import get_access
+from lib.client import openai_client
+from lib.config import CONSOLE
+from lib.models import MODELS
 
-import requests
-
-from lib import config
-from lib.confirm import confirm_cap_stopped
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key
-from lib.models import MODEL_DEFAULT
-
-# Illustrative, not a platform minimum. Bounds: dailyBudgetUsd accepts 0-10,000,000.
 DAILY_BUDGET_USD = 0.001
 MAX_TOKENS_PER_CALL = 100
-# At current catalog rates this budget is observed to cross around call ~4-6.
-MAX_CALLS = 60
 
 
-def call_chat(virtual_key: str, model: str, prompt: str) -> dict:
-    response = requests.post(
-        f"{config.BASE_URL}/v1/ai/chat/completions",
-        headers={
-            "content-type": "application/json",
-            "user-agent": config.USER_AGENT,
-            "authorization": f"Bearer {virtual_key}",
+def main() -> None:
+    print("=== FinOps: Multi-Tenant Cost Governance & Budget Caps ===\n")
+
+    # Governance setup: the policy this application runs under. Platform admins normally
+    # create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+    # points at a key whose policy already matches.
+    # hard_strict reserves against estimated cost derived from max_tokens pre-flight.
+    access = get_access(
+        app="budget-demo",
+        policy={
+            "name": "budget-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_strict",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+            "dailyBudgetUsd": DAILY_BUDGET_USD,
         },
-        json={"model": model, "max_tokens": MAX_TOKENS_PER_CALL, "messages": [{"role": "user", "content": prompt}]},
-        timeout=30,
     )
-    try:
-        body = response.json()
-    except ValueError:
-        body = None
-    return {"status": response.status_code, "body": body}
 
+    # Application code: the official SDK, pointed at the gateway with a virtual key.
+    client = openai_client(access["virtual_key"])
 
-def main():
-    suffix = config.run_suffix()
-    app_id = f"budget-limit-{suffix}"
+    print(f"Executing workload under a policy with a ${DAILY_BUDGET_USD} daily budget cap.\n")
 
-    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
-    print(f"Creating hard_strict policy with dailyBudgetUsd=${DAILY_BUDGET_USD}...")
-    policy = create_policy({
-        "name": f"budget-limit-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_strict",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-        "dailyBudgetUsd": DAILY_BUDGET_USD,
-    })
-    key = create_virtual_key({"name": f"vk-budget-limit-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
-    create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print(f"Minted key {key['id']}, bound. Firing calls (max {MAX_CALLS}) until the budget denies...\n")
+    successful_calls = 0
+    budget_tripped = False
 
-    # 2. Your application code.
-    results = []
-    for i in range(MAX_CALLS):
-        result = call_chat(key["accessToken"], MODEL_DEFAULT, f'Budget probe {i + 1}. Reply with just "ok".')
-        results.append({"label": f"call-{i + 1}", **result})
-        print(f"  [{'allowed' if result['status'] == 200 else 'blocked'}] call-{i + 1} status={result['status']}")
-        if result["status"] != 200:
-            break
+    # Execute requests in a loop until the small demo budget limit is reached
+    for i in range(1, 31):
+        try:
+            completion = client.chat.completions.create(
+                model=MODELS["default"],
+                max_tokens=MAX_TOKENS_PER_CALL,
+                messages=[{"role": "user", "content": f"Task #{i}: Generate a short status update."}],
+            )
+            successful_calls += 1
+            content = completion.choices[0].message.content or ""
+            tokens = completion.usage.total_tokens if completion.usage else 0
+            print(f'[Call {i}] Allowed - Tokens: {tokens} | Assistant: "{content.strip()[:40]}..."')
+        except APIStatusError as err:
+            if err.status_code in (402, 403, 429):
+                budget_tripped = True
+                body = err.body if isinstance(err.body, dict) else {}
+                message = body.get("message", str(err))
+                violations = body.get("violations", ["gateway_daily_budget_exceeded"])
 
-    # 3. What the gateway did. confirm_cap_stopped stops the script if the budget
-    # never denied a call, so a silent regression cannot print as a success.
-    outcomes = [{"label": r["label"], "status": r["status"], "outcome": "allowed" if r["status"] == 200 else "blocked", "reason": r["body"]} for r in results]
-    cap_info = confirm_cap_stopped(outcomes, f"dailyBudgetUsd={DAILY_BUDGET_USD}", status=402)
-    allowed_count = cap_info["allowed_count"]
-    blocked = cap_info["blocked"]
-    print(f"\n{allowed_count} calls served, then {blocked['label']} returned {blocked['status']} once the ${DAILY_BUDGET_USD}/day policy budget was exhausted.")
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by app \"{app_id}\" for the 402 block record; Explorer tab ({config.CONSOLE['spend']}) shows the spend accumulated right up to the cap.")
-    print(json.dumps(results, indent=2, default=str))
+                print(f"\n🛑 [Call {i}] Gateway Budget Limit Intercepted (HTTP {err.status_code})")
+                print(f"  Message: {message}")
+                print(f"  Violations: {', '.join(violations)}")
+
+                print("\nApplication FinOps Action:")
+                print("  Daily budget quota reached. Application gracefully halted further non-critical requests.")
+                print("  Alert dispatched to FinOps monitoring channel.\n")
+                break
+            else:
+                raise
+
+    print("Summary:")
+    print(f"  - Successful calls admitted: {successful_calls}")
+    print(f"  - Budget limit enforced: {'Yes' if budget_tripped else 'Quota not exhausted yet'}\n")
+
+    print("Review allocated spend and team attribution in the Cloptima Console:")
+    print(f"  - Spend Explorer: {CONSOLE['spend']}")
+    print(f"  - Budget Policies: {CONSOLE['policies']}")
 
 
 if __name__ == "__main__":

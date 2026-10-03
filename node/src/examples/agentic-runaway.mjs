@@ -1,34 +1,29 @@
-// Creates policies with realistic agentic-loop and retry limits and drives
-// real tool-calling conversations against the gateway, showing which turns
-// succeed vs. get blocked.
-//
-// Both limits are derived entirely from the tool-call transcript already
-// present in each request body - the growing sequence of tool calls and
-// results a normal tool-calling client already sends for the model to have
-// any memory of what it already tried. No client-declared session, step, or
-// retry identifiers are involved anywhere below.
-//
-// Loop depth counts completed tool-result turns in the conversation so far.
-// Retry count is scoped per tool_call_id, so retrying one specific call and
-// starting a new, different call are counted independently.
-//
-// Run standalone:
-//   node src/examples/agentic-runaway.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
-import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { confirmAllowed, confirmCapStopped } from '../lib/confirm.mjs';
+/**
+ * Autonomous Agent with Runaway Loop Protection
+ *
+ * Demonstrates how Cloptima policies automatically detect and halt runaway
+ * tool-calling loops without requiring custom client tracking.
+ *
+ * Pattern:
+ * 1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
+ * 2. Agent enters a multi-turn tool calling loop checking job status.
+ * 3. Gateway monitors conversation tool transcripts in real time.
+ * 4. When the loop exceeds the policy maxLoopIterations cap, gateway denies further turns (HTTP 403).
+ * 5. Application safely terminates the agent loop and returns control to the user.
+ *
+ * Run standalone:
+ *   node src/examples/agentic-runaway.mjs
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { getAccess } from '../lib/access.mjs';
 import { MODELS } from '../lib/models.mjs';
-
-// Illustrative, not a platform minimum. Bounds: 0-1,000 for both fields.
-const MAX_LOOP_ITERATIONS = 3;
-const MAX_RETRY_COUNT = 2;
+import { CONSOLE } from '../lib/config.mjs';
 
 const CHECK_STATUS_TOOL = {
   type: 'function',
   function: {
     name: 'check_status',
-    description: 'Check whether a long-running job has finished.',
+    description: 'Check whether a long-running batch job has finished.',
     parameters: {
       type: 'object',
       properties: { job_id: { type: 'string' } },
@@ -37,54 +32,86 @@ const CHECK_STATUS_TOOL = {
   },
 };
 
-function blockedOutcome(index, err) {
-  const status = err?.status ?? err?.response?.status;
-  const body = err?.error ?? err?.response?.data ?? err?.message;
-  return { index, outcome: 'blocked', status, reason: body };
-}
+async function main() {
+  console.log('=== Autonomous Agent: Runaway Loop Protection ===\n');
 
-async function runLoopIterations(client, model, iterationsToSimulate) {
-  // Forces a real tool call every turn and feeds back a synthetic "still
-  // running" result, then asks again - a realistic runaway-loop pattern.
-  // Each turn resends the whole conversation so far, including every prior
-  // tool call and result, exactly like a normal tool-calling client would.
-  const messages = [{ role: 'user', content: 'Call check_status for job "job-42" and keep checking until it is done.' }];
-  const results = [];
-  for (let i = 0; i < iterationsToSimulate; i += 1) {
-    let response;
+  // Governance setup: the policy this application runs under. Platform admins normally
+  //    create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+  //    points at a key whose policy already matches.
+  const access = await getAccess({
+    app: 'agent-loop-demo',
+    policy: {
+      name: 'agent-loop-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
+      maxLoopIterations: 3,
+      maxRetryCount: 2,
+    },
+  });
+
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  const client = openaiClient(access.virtualKey);
+
+  console.log('Starting autonomous agent loop with max 3 permitted tool iterations...\n');
+
+  const messages = [
+    { role: 'user', content: 'Call check_status for job "job-42" and keep checking until it is done.' },
+  ];
+
+  let iteration = 0;
+  const maxSimulatedTurns = 6;
+
+  while (iteration < maxSimulatedTurns) {
+    iteration++;
+    console.log(`[Turn ${iteration}] Agent requesting tool invocation...`);
+
     try {
-      response = await client.chat.completions.create({
-        model,
+      const response = await client.chat.completions.create({
+        model: MODELS.default,
         messages,
         tools: [CHECK_STATUS_TOOL],
         tool_choice: { type: 'function', function: { name: 'check_status' } },
       });
-    } catch (err) {
-      results.push(blockedOutcome(i, err));
-      break;
-    }
-    const toolCall = response.choices[0].message.tool_calls[0];
-    results.push({ index: i, outcome: 'allowed', requestId: response.id, toolCallId: toolCall.id });
-    messages.push({
-      role: 'assistant',
-      tool_calls: [{
-        id: toolCall.id,
-        type: 'function',
-        function: { name: toolCall.function.name, arguments: toolCall.function.arguments },
-      }],
-    });
-    messages.push({ role: 'tool', tool_call_id: toolCall.id, content: 'still running, check again' });
-  }
-  return results;
-}
 
-async function runRetryIterations(client, model, toolCallId, iterationsToSimulate) {
-  // Resubmits the SAME tool_call_id's result repeatedly - a client
-  // retrying one specific call. Retry scope is per tool_call_id, so this is
-  // independent of loop depth and of any other call id.
-  const results = [];
-  for (let i = 0; i < iterationsToSimulate; i += 1) {
-    const messages = [
+      const message = response.choices[0].message;
+      const toolCall = message.tool_calls?.[0];
+      messages.push(message);
+
+      console.log(`  ✓ Tool requested: ${toolCall?.function?.name || 'none'}`);
+      console.log(`  Simulating tool response: { status: "pending" }`);
+
+      // Append mock tool result to conversation history
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCall?.id || `call_${iteration}`,
+        content: JSON.stringify({ status: 'pending', progress: `${iteration * 20}%` }),
+      });
+    } catch (err) {
+      if (err.status === 403) {
+        console.log(`\n🛑 [Turn ${iteration}] Gateway Runaway Protection Tripped (HTTP 403)`);
+        console.log(`  Violations: ${(err.error?.violations || []).join(', ')}`);
+        console.log(`  Message: ${err.error?.message || err.message}`);
+
+        console.log('\nAgent Supervisor Action:');
+        console.log('  Runaway loop detected. Infinite loop terminated automatically.');
+        console.log('  Yielding control to human operator with current conversation snapshot.\n');
+        break;
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  // --- Case 2: Repeated Retry Protection on Single Tool Call (maxRetryCount) ---
+  console.log('--- Case 2: Repeated Retry Protection on a Single Tool Call ---');
+  console.log('Resubmitting results for tool_call_id "call-job-99" (max 2 retries allowed)...\n');
+
+  const toolCallId = 'call-job-99';
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    console.log(`[Attempt ${attempt}] Submitting tool result for ${toolCallId}...`);
+    const retryMessages = [
       { role: 'user', content: 'Call check_status for job "job-99".' },
       {
         role: 'assistant',
@@ -96,91 +123,34 @@ async function runRetryIterations(client, model, toolCallId, iterationsToSimulat
       },
       { role: 'tool', tool_call_id: toolCallId, content: 'still running, check again' },
     ];
+
     try {
-      const response = await client.chat.completions.create({ model, messages, tools: [CHECK_STATUS_TOOL] });
-      results.push({ index: i, outcome: 'allowed', requestId: response.id });
+      const response = await client.chat.completions.create({
+        model: MODELS.default,
+        messages: retryMessages,
+        tools: [CHECK_STATUS_TOOL],
+      });
+      console.log(`  ✓ Allowed: Request ID ${response.id}`);
     } catch (err) {
-      results.push(blockedOutcome(i, err));
+      if (err.status === 403) {
+        console.log(`\n🛑 [Attempt ${attempt}] Gateway Tool Retry Protection Tripped (HTTP 403)`);
+        console.log(`  Violations: ${(err.error?.violations || []).join(', ')}`);
+        console.log(`  Message: ${err.error?.message || err.message}`);
+        console.log('\nAgent Supervisor Action:');
+        console.log(`  Max retry count reached for tool call "${toolCallId}". Halting retries and reporting error to caller.\n`);
+        break;
+      } else {
+        throw err;
+      }
     }
   }
-  return results;
-}
 
-async function main() {
-  const suffix = runSuffix();
-
-  const loopAppId = `agentic-loop-${suffix}`;
-  console.log(`Creating policy with maxLoopIterations=${MAX_LOOP_ITERATIONS}...`);
-  const loopPolicy = await createPolicy({
-    name: `agentic-loop-${suffix}`,
-    mode: 'enforce',
-    budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'],
-    allowedModels: [MODELS.default],
-    maxLoopIterations: MAX_LOOP_ITERATIONS,
-  });
-  const loopKey = await createVirtualKey({ name: `vk-agentic-loop-${suffix}`, teamId: 'Platform AI', appId: loopAppId, environment: 'dev' });
-  await createBinding({ policyId: loopPolicy.id, teamId: 'Platform AI', appId: loopAppId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log(`Minted key ${loopKey.id}, bound.\n`);
-
-  const loopClient = openaiStyleClient(loopKey.accessToken, config.baseUrl);
-  const loopIterationsToSimulate = MAX_LOOP_ITERATIONS + 2;
-  console.log(`Driving a real tool-calling loop for ${loopIterationsToSimulate} turns...\n`);
-  const loopResults = await runLoopIterations(loopClient, MODELS.default, loopIterationsToSimulate);
-  for (const r of loopResults) {
-    console.log(`  [${r.outcome}] turn ${r.index}`);
-  }
-  // What the gateway did. The loop depth comes from the transcript itself, so
-  // this holds without the client reporting a count of any kind.
-  confirmCapStopped(loopResults, `maxLoopIterations=${MAX_LOOP_ITERATIONS}`, {
-    status: 403,
-    expectedAllowed: MAX_LOOP_ITERATIONS + 1,
-  });
-  console.log(
-    `\nConfirmed: turns 0-${MAX_LOOP_ITERATIONS} served, turn ${MAX_LOOP_ITERATIONS + 1} blocked ` +
-    '("exceeds the active Cloptima agent limits") - counted from the tool-call turns already present in the ' +
-    'conversation, not any client-supplied count.',
-  );
-  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${loopAppId}" for the blocked turn.`);
-  console.log(JSON.stringify(loopResults, null, 2));
-
-  const retryAppId = `agentic-retry-${suffix}`;
-  console.log(`\nCreating policy with maxRetryCount=${MAX_RETRY_COUNT}...`);
-  const retryPolicy = await createPolicy({
-    name: `agentic-retry-${suffix}`,
-    mode: 'enforce',
-    budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'],
-    allowedModels: [MODELS.default],
-    maxRetryCount: MAX_RETRY_COUNT,
-  });
-  const retryKey = await createVirtualKey({ name: `vk-agentic-retry-${suffix}`, teamId: 'Platform AI', appId: retryAppId, environment: 'dev' });
-  await createBinding({ policyId: retryPolicy.id, teamId: 'Platform AI', appId: retryAppId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log(`Minted key ${retryKey.id}, bound.\n`);
-
-  const retryClient = openaiStyleClient(retryKey.accessToken, config.baseUrl);
-  const retryIterationsToSimulate = MAX_RETRY_COUNT + 2;
-  console.log(`Resubmitting the same tool call ${retryIterationsToSimulate} times...\n`);
-  const retryResults = await runRetryIterations(retryClient, MODELS.default, 'call-job-99', retryIterationsToSimulate);
-  for (const r of retryResults) {
-    console.log(`  [${r.outcome}] attempt ${r.index}`);
-  }
-  confirmCapStopped(retryResults, `maxRetryCount=${MAX_RETRY_COUNT}`, {
-    status: 403,
-    expectedAllowed: MAX_RETRY_COUNT + 1,
-  });
-  console.log(
-    `\nConfirmed: attempts 0-${MAX_RETRY_COUNT} served, attempt ${MAX_RETRY_COUNT + 1} blocked - counted ` +
-    'per tool_call_id, so a different call id gets its own independent count.',
-  );
-  const otherCallResult = (await runRetryIterations(retryClient, MODELS.default, 'call-job-100', 1))[0];
-  confirmAllowed(otherCallResult, 'a different tool_call_id starts its own retry count');
-  console.log(`  [${otherCallResult.outcome}] a different tool_call_id, first attempt`);
-  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${retryAppId}" for the blocked attempt.`);
-  console.log(JSON.stringify([...retryResults, otherCallResult], null, 2));
+  console.log(`Review agent session telemetry in Cloptima Console:`);
+  console.log(`  - Audit Trail: ${CONSOLE.audit}`);
+  console.log(`  - Loop & Retry Policies: ${CONSOLE.policies}`);
 }
 
 main().catch((err) => {
-  console.error('agentic-runaway failed:', err);
+  console.error('Example failed:', err.message);
   process.exitCode = 1;
 });

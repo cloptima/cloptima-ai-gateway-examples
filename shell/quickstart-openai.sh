@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Simplest possible working call: mint a policy + virtual key, then call the
-# gateway with a plain curl POST in the OpenAI-compatible shape.
+# Quickstart: call the Cloptima AI Gateway with plain curl in the OpenAI-compatible shape.
+# Integrating takes two changes to an existing OpenAI call: send a Cloptima virtual key
+# as the bearer token and use the gateway URL.
+#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the policy and key). See .env.example.
 # Run standalone: ./quickstart-openai.sh
 set -euo pipefail
 
@@ -10,36 +14,54 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
-SUFFIX="$(run_suffix)"
-APP_ID="quickstart-openai-$SUFFIX"
 
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-echo "Creating policy allowing $MODEL_DEFAULT on the managed Vertex AI provider..."
-POLICY=$(create_policy "$(jq -n --arg name "quickstart-openai-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model]}')")
-POLICY_ID=$(echo "$POLICY" | jq -r '.id')
-echo "  policy $(echo "$POLICY" | jq -r '.name') -> $POLICY_ID"
+echo "=== Cloptima AI Gateway: OpenAI-compatible Quickstart ==="
+echo ""
 
-echo "Minting a virtual key attributed to team Quickstart, app $APP_ID..."
-KEY=$(create_virtual_key "$(jq -n --arg name "vk-quickstart-openai-$SUFFIX" --arg appId "$APP_ID" \
-  '{name: $name, teamId: "Quickstart", appId: $appId, environment: "dev"}')")
-KEY_ID=$(echo "$KEY" | jq -r '.id')
-ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
-echo "  key $KEY_ID"
+# Governance setup: the policy this application runs under. Platform admins normally
+# create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+# points at a key whose policy already matches.
+get_access "quickstart-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
+  name: "quickstart-policy", mode: "enforce", budgetMode: "hard_fast",
+  allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
 
-echo "Binding the policy to app $APP_ID - the gateway serves only requests a bound policy covers..."
-create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
-  '{policyId: $policyId, teamId: "Quickstart", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Bound. Calling the gateway..."
-
-# 2. Your application code.
-call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" \
-  "In one sentence, confirm this call went through Cloptima's managed AI gateway." \
-  "quickstart-openai"
-
-# 3. What the gateway did.
-jq '.' "$RESP_BODY_FILE"
-confirm_allowed "quickstart call through a bound virtual key"
+# Application code: a standard chat completion. The gateway URL and a virtual key are the only
+# Cloptima-specific parts. Send a User-Agent: the gateway sits behind a bot-managed edge.
+echo "--- 1. Standard Chat Completion ---"
+curl -sS -X POST "$BASE_URL/v1/ai/chat/completions" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: $USER_AGENT" \
+  -d @- <<JSON | jq -r '"Assistant: \(.choices[0].message.content)\nTokens: \(.usage.total_tokens) (prompt: \(.usage.prompt_tokens), completion: \(.usage.completion_tokens))\nRequest ID: \(.id)"'
+{
+  "model": "$MODEL_DEFAULT",
+  "messages": [
+    {"role": "system", "content": "You are a helpful cloud engineer."},
+    {"role": "user", "content": "Explain what an AI gateway does in one clear sentence."}
+  ]
+}
+JSON
 
 echo ""
-echo "Evidence: Explorer tab ($CONSOLE_SPEND) - find this request_id to see attributed spend and usage."
+echo "--- 2. Streaming Chat Completion ---"
+printf 'Assistant: '
+curl -sS -N -X POST "$BASE_URL/v1/ai/chat/completions" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: $USER_AGENT" \
+  -d @- <<JSON | while IFS= read -r line; do
+{
+  "model": "$MODEL_DEFAULT",
+  "messages": [{"role": "user", "content": "Count from 1 to 5 with commas."}],
+  "stream": true
+}
+JSON
+  case "$line" in
+    "data: [DONE]" | "") ;;
+    data:*) printf '%s' "$(jq -r '.choices[0].delta.content // empty' <<<"${line#data: }")" ;;
+  esac
+done
+echo ""
+
+echo ""
+echo "View live spend, latency, and attribution in the console: $CONSOLE_SPEND"

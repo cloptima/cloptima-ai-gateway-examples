@@ -1,78 +1,86 @@
-"""Set a per-request scan cost cap in a provider-backed guardrail profile.
+"""Guardrail Cost Governance: Managed Provider Scan Cost Capping
 
-The billable managed scan requires available Cloptima managed credits.
+Demonstrates how to configure a per-request cost cap on provider-backed guardrail
+scans (e.g. Google Model Armor) to protect against unexpected security scanning costs.
 
-Run standalone from python/ with:
-    python -m examples.guardrail_cost_governance
+Prerequisite:
+- Requires available Cloptima managed credits because external provider scans are billable.
+
+Run standalone:
+  python -m examples.guardrail_cost_governance
 """
+from openai import APIStatusError
 
-from lib import config
-from lib.confirm import confirm_allowed
-from lib.gateway_admin import create_binding, create_guardrail_profile, create_policy, create_virtual_key
-from lib.gateway_clients import openai_style_client
-from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT
-
+from lib.access import get_access
+from lib.client import openai_client
+from lib.config import CONSOLE
+from lib.models import MODELS
 
 MAX_COST_PER_REQUEST_CENTS = 1
 
 
-def main():
-    suffix = config.run_suffix()
-    app_id = f"guardrail-cost-governance-{suffix}"
-    print("Prerequisite: the account must have managed credits available for this billable guardrail scan.")
-    profile = create_guardrail_profile({
-        "name": f"guardrail-cost-governance-{suffix}",
-        "description": "Managed Model Armor scan with a per-request cost cap",
-        "definition": {
-            "input": {"action": "observe", "detectors": {"secret": {}}},
-            "output": {"action": "observe", "detectors": {"secret": {}}},
-            "provider_integration": {
-                "kind": "google_model_armor",
-                "credential_source": "cloptima_managed",
-                "scan_directions": "input",
-            },
-            "cost": {
-                "mode": "enforce",
-                "max_cost_per_request_cents": MAX_COST_PER_REQUEST_CENTS,
-                "exceeded_action": "block",
+def main() -> None:
+    print("=== Guardrail Cost Governance: Per-Request Scan Cap ===\n")
+    print("Prerequisite: The account must have managed credits available for billable guardrail scans.\n")
+
+    # Governance setup: a guardrail profile with a managed Model Armor scan and a per-request cost cap,
+    # attached to the policy this application runs under. Platform admins normally create these once
+    # in the Console, Terraform, or CI. Skipped when CLOPTIMA_VIRTUAL_KEY points at a key whose policy
+    # already matches.
+    print(f"Configuring guardrail profile with Google Model Armor and a {MAX_COST_PER_REQUEST_CENTS}¢ cap...")
+    access = get_access(
+        app="guardrail-cost-demo",
+        guardrail_profile={
+            "name": "guardrail-cost-profile",
+            "description": "Managed Model Armor scan with a per-request cost cap",
+            "definition": {
+                "input": {"action": "observe", "detectors": {"secret": {}}},
+                "output": {"action": "observe", "detectors": {"secret": {}}},
+                "provider_integration": {
+                    "kind": "google_model_armor",
+                    "credential_source": "cloptima_managed",
+                    "scan_directions": "input",
+                },
+                "cost": {
+                    "mode": "enforce",
+                    "max_cost_per_request_cents": MAX_COST_PER_REQUEST_CENTS,
+                    "exceeded_action": "block",
+                },
             },
         },
-    })
-    policy = create_policy({
-        "name": f"guardrail-cost-governance-{suffix}",
-        "mode": "enforce",
-        "budgetMode": "hard_fast",
-        "failMode": "fail_closed",
-        "allowedProviders": ["vertex_ai"],
-        "allowedModels": [MODEL_DEFAULT],
-        "guardrailProfileId": profile["id"],
-    })
-    key = create_virtual_key({
-        "name": f"vk-guardrail-cost-governance-{suffix}",
-        "teamId": "Platform AI",
-        "appId": app_id,
-        "environment": "dev",
-    })
-    create_binding({
-        "policyId": policy["id"],
-        "teamId": "Platform AI",
-        "appId": app_id,
-        "environment": "dev",
-        "priority": 10,
-        "acknowledgeOverlap": True,
-    })
-
-    result = call_openai_style(
-        openai_style_client(key["accessToken"], config.BASE_URL),
-        MODEL_DEFAULT,
-        "Reply with exactly: scan cost is within the configured cap.",
-        "cost-governance-probe",
+        policy={
+            "name": "guardrail-cost-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "failMode": "fail_closed",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+        },
     )
-    print(f"[{result['outcome']}] {result}")
-    confirm_allowed(result, "provider scan stayed within the configured cost cap")
-    print(f"\nConfirmed: the profile's {MAX_COST_PER_REQUEST_CENTS}-cent cap admitted this scan.")
-    print(f"Profile: {profile['id']}; policy: {policy['id']}; review them in {config.CONSOLE['policies']} and {config.CONSOLE['audit']}")
+
+    # Application code: the official SDK, pointed at the gateway with a virtual key.
+    client = openai_client(access["virtual_key"])
+
+    print("Sending user prompt through guarded route...")
+    try:
+        response = client.chat.completions.create(
+            model=MODELS["default"],
+            messages=[{"role": "user", "content": "Confirm this request passed safety scan within cost budget."}],
+        )
+        content = response.choices[0].message.content or ""
+        print(f'Assistant: "{content.strip()}"')
+        print(f"Scan outcome: Admitted and served within the {MAX_COST_PER_REQUEST_CENTS}¢ budget cap.")
+    except APIStatusError as err:
+        if err.status_code == 403:
+            print(f"🛑 Scan Cost Exceeded Cap (HTTP 403): {err}")
+        else:
+            print(f"Request error: {err}")
+    except Exception as err:
+        print(f"Request error: {err}")
+
+    print("\nReview guardrail scan ledger and policies in Cloptima Console:")
+    print(f"  - Guardrail Scan Ledger: {CONSOLE['audit']}")
+    print(f"  - Policies: {CONSOLE['policies']}")
 
 
 if __name__ == "__main__":

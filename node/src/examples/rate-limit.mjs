@@ -1,78 +1,98 @@
-// Creates a policy with a realistic per-minute request rate cap, fires calls
-// fast enough to exceed it, and shows the 429 once the cap is hit.
-// Rate limits are evaluated per calendar minute (e.g. 10:00:00-10:00:59 UTC), not rolling 60s.
-// Run standalone:
-//   node src/examples/rate-limit.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
-import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { callOpenAIStyle } from '../lib/callGateway.mjs';
-import { confirmCapStopped } from '../lib/confirm.mjs';
+/**
+ * Resilient Batch Worker: Rate Limit Handling & Backoff
+ *
+ * Demonstrates how client applications handle rate limits (HTTP 429) enforced
+ * by Cloptima policies using standard retry and exponential backoff patterns.
+ *
+ * Pattern:
+ * 1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
+ * 2. Process a series of tasks.
+ * 3. When rate limits are tripped (HTTP 429), catch the error, back off, and retry.
+ *
+ * Run standalone:
+ *   node src/examples/rate-limit.mjs
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { getAccess } from '../lib/access.mjs';
 import { MODELS } from '../lib/models.mjs';
+import { CONSOLE } from '../lib/config.mjs';
 
-// Illustrative, not a platform minimum - change this and re-run to see the
-// cap move. Bounds: requestRateLimitPerMinute accepts 1-1,000,000.
-const REQUEST_RATE_LIMIT_PER_MINUTE = 20;
-const CALLS_TO_FIRE = 25;
-
-async function main() {
-  const suffix = runSuffix();
-  const appId = `rate-limit-${suffix}`;
-
-  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
-  console.log(`Creating policy with requestRateLimitPerMinute=${REQUEST_RATE_LIMIT_PER_MINUTE}...`);
-  const policy = await createPolicy({
-    name: `rate-limit-${suffix}`,
-    mode: 'enforce',
-    budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'],
-    allowedModels: [MODELS.default],
-    requestRateLimitPerMinute: REQUEST_RATE_LIMIT_PER_MINUTE,
-  });
-  const key = await createVirtualKey({ name: `vk-rate-limit-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
-  await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log(`Minted key ${key.id}, bound.`);
-
-  // 2. Your application code - the official OpenAI SDK, unchanged.
-  await startOfCalendarMinute();
-  console.log(`Firing ${CALLS_TO_FIRE} calls back-to-back...\n`);
-  const client = openaiStyleClient(key.accessToken, config.baseUrl);
-  const results = [];
-  for (let i = 0; i < CALLS_TO_FIRE; i += 1) {
-    const result = await callOpenAIStyle(client, {
-      model: MODELS.default,
-      prompt: `Rate limit probe ${i + 1}. Reply with just "ok".`,
-      label: `call-${i + 1}`,
-    });
-    results.push(result);
-    console.log(`  [${result.outcome}] call-${i + 1} status=${result.status ?? 200}`);
-    if (result.outcome !== 'allowed') break;
-  }
-
-  // 3. What the gateway did. confirmCapStopped stops the script if the cap
-  // never fired, so a silent regression cannot print as a success.
-  const { allowedCount, blocked } = confirmCapStopped(
-    results,
-    `requestRateLimitPerMinute=${REQUEST_RATE_LIMIT_PER_MINUTE}`,
-    { status: 429, expectedAllowed: REQUEST_RATE_LIMIT_PER_MINUTE },
-  );
-  console.log(`\n${allowedCount} calls served, then ${blocked.label} returned ${blocked.status} once the ${REQUEST_RATE_LIMIT_PER_MINUTE}/minute cap was reached.`);
-  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${appId}" for the 429 block record; Policies tab (${CONSOLE.policies}) shows the requestRateLimitPerMinute config that fired.`);
-  console.log(JSON.stringify(results, null, 2));
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Rate limits are evaluated per calendar minute, so a burst that straddles a
-// minute boundary is split across two windows and can stay under the cap in
-// both. Waiting for a fresh window keeps the demonstration deterministic
-// instead of dependent on what time it happens to run.
-async function startOfCalendarMinute() {
-  const secondsLeft = 60 - new Date().getUTCSeconds();
-  if (secondsLeft >= CALLS_TO_FIRE + 5) return;
-  console.log(`Waiting ${secondsLeft}s for the next calendar minute so the whole burst lands in one window...`);
-  await new Promise((resolve) => { setTimeout(resolve, secondsLeft * 1000); });
+async function executeWithRetry(client, taskPrompt, maxRetries = 3) {
+  let attempt = 0;
+  let delayMs = 1000;
+
+  while (attempt <= maxRetries) {
+    try {
+      const completion = await client.chat.completions.create({
+        model: MODELS.default,
+        max_tokens: 30,
+        messages: [{ role: 'user', content: taskPrompt }],
+      });
+      return { status: 200, content: completion.choices[0]?.message?.content?.trim() };
+    } catch (err) {
+      if (err.status === 429 && attempt < maxRetries) {
+        attempt++;
+        console.log(`  ⚠️ Rate limit reached (HTTP 429). Retrying in ${delayMs}ms (attempt ${attempt}/${maxRetries})...`);
+        await sleep(delayMs);
+        delayMs *= 2; // exponential backoff
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
+async function main() {
+  console.log('=== Resilient Application: Rate Limiting & Backoff ===\n');
+
+  // Governance setup: the policy this application runs under. Platform admins normally
+  //    create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+  //    points at a key whose policy already matches.
+  const access = await getAccess({
+    app: 'rate-limit-demo',
+    policy: {
+      name: 'rate-limit-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
+      requestRateLimitPerMinute: 3,
+    },
+  });
+
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  const client = openaiClient(access.virtualKey);
+
+  console.log('Sending requests through rate-limited policy...\n');
+
+  const tasks = [
+    'Translate "Hello" to French.',
+    'Translate "Thank you" to Spanish.',
+    'Translate "Good morning" to German.',
+    'Translate "Goodbye" to Italian.',
+    'Translate "Welcome" to Portuguese.',
+  ];
+
+  for (const [i, task] of tasks.entries()) {
+    console.log(`[Task ${i + 1}] Submitting: "${task}"`);
+    try {
+      const result = await executeWithRetry(client, task);
+      console.log(`  ✓ Completed: "${result.content}"\n`);
+    } catch (err) {
+      console.log(`  ❌ Task failed permanently: ${err.message}\n`);
+    }
+  }
+
+  console.log(`Review rate limit events and policy audit in the Cloptima Console:`);
+  console.log(`  - Audit Trail: ${CONSOLE.audit}`);
+  console.log(`  - Rate Limit Policies: ${CONSOLE.policies}`);
 }
 
 main().catch((err) => {
-  console.error('rate-limit failed:', err);
+  console.error('Example failed:', err.message);
   process.exitCode = 1;
 });

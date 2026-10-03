@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Shared helpers sourced by every self-contained example script in this
-# directory. Each example creates its own policy, virtual key, and binding
-# using the shared ai:admin key, then exercises it - nothing is
-# pre-provisioned. Source this from an example with:
+# Shared helpers sourced by every example script in this directory.
+# Each example has a governance-setup part (get_access / provision_app: policy,
+# virtual key, binding) and an application part written as plain curl calls.
+# Source this from an example with:
 #   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   source "$SCRIPT_DIR/lib.sh"
 
@@ -40,9 +40,17 @@ load_env() {
     source "$env_file"
     set +a
   fi
-  : "${CLOPTIMA_AI_ADMIN_KEY:?Set CLOPTIMA_AI_ADMIN_KEY - copy .env.example to .env and fill it in}"
+  CLOPTIMA_AI_ADMIN_KEY="${CLOPTIMA_AI_ADMIN_KEY:-}"
+  CLOPTIMA_VIRTUAL_KEY="${CLOPTIMA_VIRTUAL_KEY:-}"
   BASE_URL="${CLOPTIMA_GATEWAY_BASE_URL:-$GATEWAY_BASE_URL_DEFAULT}"
   BASE_URL="${BASE_URL%/}"
+}
+
+require_admin_key() {
+  if [ -z "$CLOPTIMA_AI_ADMIN_KEY" ]; then
+    echo "This example creates governance resources and needs CLOPTIMA_AI_ADMIN_KEY. Add it to .env (see .env.example)." >&2
+    exit 1
+  fi
 }
 
 # A short, unique-ish suffix so re-running an example doesn't collide with a
@@ -52,14 +60,11 @@ run_suffix() {
   printf '%04x%02x' "$((RANDOM % 65536))" "$((RANDOM % 256))"
 }
 
-new_uuid() {
-  uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())'
-}
-
 # graphql <query> <variables_json> -> prints .data on success, exits 1 on error
 graphql() {
   local query="$1" variables="$2"
   local body response
+  require_admin_key
   body=$(jq -n --arg query "$query" --argjson variables "$variables" '{query: $query, variables: $variables}')
   response=$(curl -sS -X POST "$BASE_URL/graphql" \
     -H "Authorization: Bearer $CLOPTIMA_AI_ADMIN_KEY" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" -d "$body")
@@ -141,104 +146,66 @@ list_llm_gateway_approvals() {
 RESP_BODY_FILE="$(mktemp)"
 trap 'rm -f "$RESP_BODY_FILE"' EXIT
 
-# outcome_for_status <http_code> -> allowed | blocked | error
-outcome_for_status() {
-  local code="$1"
-  if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then echo "allowed"
-  elif [ "$code" -ge 400 ] && [ "$code" -lt 500 ]; then echo "blocked"
-  else echo "error"
+TEAM_ID="AI Engineering"
+ENVIRONMENT="development"
+
+# provision_app <app> <policy_json> [guardrail_profile_json]
+# Governance setup: creates the policy (and optional guardrail profile), a
+# virtual key, and the binding that attaches the policy to that key's
+# team/app/environment. Platform teams normally do this once in the Console,
+# Terraform, or CI. Each example passes its policy definition inline so the
+# configuration being demonstrated is visible next to the application code.
+# Requires CLOPTIMA_AI_ADMIN_KEY. Sets SUFFIX, APP_ID, ACCESS_TOKEN, POLICY_ID,
+# and PROFILE_ID (empty when no profile).
+provision_app() {
+  local app="$1" policy_json="$2" profile_json="${3:-}"
+  local profile policy key
+  SUFFIX="$(run_suffix)"
+  APP_ID="$app-$SUFFIX"
+  PROFILE_ID=""
+  if [ -n "$profile_json" ]; then
+    profile=$(create_guardrail_profile "$(jq -c --arg suffix "$SUFFIX" '.name += "-" + $suffix' <<<"$profile_json")")
+    PROFILE_ID=$(jq -r '.id' <<<"$profile")
+    policy_json=$(jq -c --arg profileId "$PROFILE_ID" '.guardrailProfileId = $profileId' <<<"$policy_json")
   fi
+  policy=$(create_policy "$(jq -c --arg suffix "$SUFFIX" '.name += "-" + $suffix' <<<"$policy_json")")
+  POLICY_ID=$(jq -r '.id' <<<"$policy")
+  key=$(create_virtual_key "$(jq -n --arg name "vk-$APP_ID" --arg team "$TEAM_ID" --arg appId "$APP_ID" --arg env "$ENVIRONMENT" \
+    '{name: $name, teamId: $team, appId: $appId, environment: $env}')")
+  ACCESS_TOKEN=$(jq -r '.accessToken' <<<"$key")
+  create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg team "$TEAM_ID" --arg appId "$APP_ID" --arg env "$ENVIRONMENT" \
+    '{policyId: $policyId, teamId: $team, appId: $appId, environment: $env, priority: 10, acknowledgeOverlap: true}')" >/dev/null
 }
 
-# call_chat <virtual_key> <model> <prompt> <label> [header: value ...]
-# OpenAI-style call: POST /v1/ai/chat/completions with Authorization: Bearer <key>.
-# Sets LAST_HTTP_CODE and LAST_OUTCOME globals so callers can branch on the
-# real status instead of guessing from the response body.
-call_chat() {
-  local key="$1" model="$2" prompt="$3" label="$4"; shift 4
-  local -a curl_headers=(-H "Authorization: Bearer $key" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT")
-  for kv in "$@"; do curl_headers+=(-H "$kv"); done
-  local body
-  body=$(jq -n --arg model "$model" --arg prompt "$prompt" '{model: $model, messages: [{role: "user", content: $prompt}]}')
-  LAST_HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" "${curl_headers[@]}" -d "$body")
-  LAST_OUTCOME=$(outcome_for_status "$LAST_HTTP_CODE")
-  echo "  [$LAST_OUTCOME] $label (http $LAST_HTTP_CODE)"
+# get_access <app> <policy_json> [guardrail_profile_json]
+# Sets ACCESS_TOKEN, the virtual key the application code should use.
+# - CLOPTIMA_VIRTUAL_KEY set: use it as-is. The key must already be bound to a
+#   policy equivalent to the one in the example's governance setup.
+# - Otherwise: run the governance setup with CLOPTIMA_AI_ADMIN_KEY.
+get_access() {
+  if [ -n "$CLOPTIMA_VIRTUAL_KEY" ]; then
+    echo "Using CLOPTIMA_VIRTUAL_KEY. The key should be bound to a policy like the governance setup in this file."
+    echo ""
+    ACCESS_TOKEN="$CLOPTIMA_VIRTUAL_KEY"
+    APP_ID=""
+    return 0
+  fi
+  if [ -z "$CLOPTIMA_AI_ADMIN_KEY" ]; then
+    echo "Set CLOPTIMA_VIRTUAL_KEY to use an existing key, or CLOPTIMA_AI_ADMIN_KEY to let this example create its own policy and key (see .env.example)." >&2
+    exit 1
+  fi
+  provision_app "$@"
 }
 
-# call_messages <virtual_key> <model> <prompt> <label> [header: value ...]
-# Anthropic-style call: POST /v1/messages with x-api-key: <key>, accepted
-# specifically for Anthropic-SDK compatibility. Sets LAST_HTTP_CODE/LAST_OUTCOME.
-call_messages() {
-  local key="$1" model="$2" prompt="$3" label="$4"; shift 4
-  local -a curl_headers=(-H "x-api-key: $key" -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT")
-  for kv in "$@"; do curl_headers+=(-H "$kv"); done
-  local body
-  body=$(jq -n --arg model "$model" --arg prompt "$prompt" '{model: $model, max_tokens: 300, messages: [{role: "user", content: $prompt}]}')
-  LAST_HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/messages" "${curl_headers[@]}" -d "$body")
-  LAST_OUTCOME=$(outcome_for_status "$LAST_HTTP_CODE")
-  echo "  [$LAST_OUTCOME] $label (http $LAST_HTTP_CODE)"
-}
-
-# The policy, binding, and virtual key an example creates are the entire
-# contract. These confirm the gateway honoured that contract and stop the
-# script with a specific message when it did not, so a run where enforcement
-# quietly stopped working can never print as a success.
-#
-# Nothing here asks the gateway to enforce anything. No header, flag, or
-# counter is sent - the only input is the configuration registered above.
-
-confirm_allowed() {
-  local what="$1"
-  if [ "$LAST_OUTCOME" != "allowed" ]; then
-    echo "ERROR: $what: expected this call to be served, got outcome=$LAST_OUTCOME status=$LAST_HTTP_CODE body=$(cat "$RESP_BODY_FILE")" >&2
-    exit 1
-  fi
-}
-
-confirm_blocked() {
-  local what="$1"
-  local expected_status="${2:-}"
-  local violation="${3:-}"
-  if [ "$LAST_OUTCOME" != "blocked" ]; then
-    echo "ERROR: $what: expected the gateway to block this call, got outcome=$LAST_OUTCOME status=$LAST_HTTP_CODE body=$(cat "$RESP_BODY_FILE")" >&2
-    exit 1
-  fi
-  if [ -n "$expected_status" ] && [ "$LAST_HTTP_CODE" -ne "$expected_status" ]; then
-    echo "ERROR: $what: expected HTTP $expected_status, got outcome=$LAST_OUTCOME status=$LAST_HTTP_CODE body=$(cat "$RESP_BODY_FILE")" >&2
-    exit 1
-  fi
-  if [ -n "$violation" ]; then
-    local body
-    body="$(cat "$RESP_BODY_FILE" 2>/dev/null || true)"
-    if ! echo "$body" | grep -qi "$violation"; then
-      echo "ERROR: $what: expected the block to name \"$violation\", got outcome=$LAST_OUTCOME status=$LAST_HTTP_CODE body=$body" >&2
-      exit 1
-    fi
-  fi
-}
-
-confirm_cap_stopped() {
-  local allowed_count="$1"
-  local expected_allowed="${2:-}"
-  local cap_name="$3"
-  if [ "$LAST_OUTCOME" != "blocked" ]; then
-    echo "ERROR: cap did not hold: all calls succeeded; $cap_name was expected to stop the burst" >&2
-    exit 1
-  fi
-  if [ -n "$expected_allowed" ] && [ "$allowed_count" -ne "$expected_allowed" ]; then
-    echo "ERROR: $cap_name: expected $expected_allowed calls allowed before cap, got $allowed_count" >&2
-    exit 1
-  fi
-}
-
-confirm_equals() {
-  local actual="$1"
-  local expected="$2"
-  local what="$3"
-  if [ "$actual" != "$expected" ]; then
-    echo "ERROR: $what: expected '$expected', got '$actual'" >&2
-    exit 1
-  fi
+# describe_block
+# Prints the message, reason, and violations the gateway returned for a blocked
+# request. The gateway reports a block as
+#   {"error": "<message>", "reason": "...", "violations": ["..."]}
+# and the response body is left in $RESP_BODY_FILE by the calling curl.
+describe_block() {
+  echo "  Message: $(jq -r '.error // .message // "blocked"' "$RESP_BODY_FILE" 2>/dev/null || cat "$RESP_BODY_FILE")"
+  echo "  Reason: $(jq -r '.reason // "n/a"' "$RESP_BODY_FILE" 2>/dev/null || echo "n/a")"
+  echo "  Violations: $(jq -r '(.violations // []) | if length == 0 then "none" else join(", ") end' "$RESP_BODY_FILE" 2>/dev/null || echo "none")"
 }
 
 # Rate limits are evaluated per calendar minute, so a burst that straddles a

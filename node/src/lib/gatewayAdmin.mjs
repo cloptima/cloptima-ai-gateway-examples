@@ -5,6 +5,9 @@ import { config, USER_AGENT } from './config.mjs';
 // Cloptima-internal - createLLMGatewayPolicy/Binding/Key are the same public
 // mutations any customer's own tooling would call.
 export async function graphql(query, variables) {
+  if (!config.aiAdminKey) {
+    throw new Error('This example creates governance resources and needs CLOPTIMA_AI_ADMIN_KEY. Add it to .env (see .env.example).');
+  }
   const response = await fetch(`${config.baseUrl}/graphql`, {
     method: 'POST',
     headers: {

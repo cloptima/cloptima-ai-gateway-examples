@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Creates a policy with a realistic maxOutputTokens cap - well above the
-# platform floor of 64 - and shows a long-response request get blocked
-# pre-flight rather than silently truncated.
+# Summarization service under an output-token cap. A request within the cap is served. A request
+# asking for more output than the policy allows is rejected pre-flight, before any compute cost.
+#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the policy and key). See .env.example.
 # Run standalone: ./token-limit.sh
 set -euo pipefail
 
@@ -11,35 +13,52 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
-# Illustrative, not a platform minimum - the platform floor is 64.
+# Illustrative, not a platform minimum. The minimum allowed value is 64.
 MAX_OUTPUT_TOKENS=200
-SUFFIX="$(run_suffix)"
-APP_ID="token-limit-$SUFFIX"
 
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-echo "Creating policy with maxOutputTokens=$MAX_OUTPUT_TOKENS..."
-POLICY=$(create_policy "$(jq -n --arg name "token-limit-$SUFFIX" --arg model "$MODEL_DEFAULT" --argjson tokens "$MAX_OUTPUT_TOKENS" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model], maxOutputTokens: $tokens}')")
-POLICY_ID=$(echo "$POLICY" | jq -r '.id')
-
-KEY=$(create_virtual_key "$(jq -n --arg name "vk-token-limit-$SUFFIX" --arg appId "$APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Requesting a long response the policy should reject..."
+echo "=== Summarization Service: Output Token Boundaries ==="
 echo ""
 
-# 2. Your application code.
-call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "Write a detailed 500-word essay about the history of cloud computing." \
-  "token-limit-probe"
-jq '.' "$RESP_BODY_FILE"
+# Governance setup: the policy this application runs under. Platform admins normally create it
+# once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
+# key whose policy already matches.
+get_access "token-limit-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson tokens "$MAX_OUTPUT_TOKENS" '{
+  name: "token-limit-policy", mode: "enforce", budgetMode: "hard_fast",
+  allowedProviders: ["vertex_ai"], allowedModels: [$model], maxOutputTokens: $tokens}')"
 
-# 3. What the gateway did. confirm_blocked stops the script if the policy
-# above was not held, so a silent regression cannot print as a success.
-confirm_blocked "maxOutputTokens=$MAX_OUTPUT_TOKENS" 403 "output limit"
+# Application code: the same call with two different max_tokens values.
+summarize() {
+  local prompt="$1" max_tokens="$2"
+  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code}' -X POST "$BASE_URL/v1/ai/chat/completions" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: $USER_AGENT" \
+    -d "$(jq -n --arg model "$MODEL_DEFAULT" --arg prompt "$prompt" --argjson max "$max_tokens" \
+      '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')")
+}
+
+echo "--- Case 1: Concise Summary (within the $MAX_OUTPUT_TOKENS token cap) ---"
+summarize "Summarize the concept of API gateways in 10 words." 30
+if [ "$HTTP_CODE" = "200" ]; then
+  jq -r '"Assistant: \(.choices[0].message.content)\nTokens used: \(.usage.completion_tokens)"' "$RESP_BODY_FILE"
+else
+  echo "Unexpected error (HTTP $HTTP_CODE):"; describe_block
+fi
 
 echo ""
-echo "Confirmed: blocked pre-flight ($LAST_HTTP_CODE) - the request's default max_tokens exceeds $MAX_OUTPUT_TOKENS,"
-echo "and the error names both the requested and the allowed value."
-echo "Evidence: Audit tab ($CONSOLE_AUDIT) - the block record names both the requested and allowed token values; Policies tab ($CONSOLE_POLICIES) shows the maxOutputTokens config."
+echo "--- Case 2: Oversized Generation (500 tokens exceeds the $MAX_OUTPUT_TOKENS token cap) ---"
+summarize "Write a comprehensive 500-word analysis on distributed microservice architectures." 500
+if [ "$HTTP_CODE" = "403" ]; then
+  echo "Gateway token boundary enforced (HTTP 403):"
+  describe_block
+  echo ""
+  echo "Application fallback: request rejected pre-flight before incurring compute costs."
+  echo "Notice to client: \"Please request a concise summary (under $MAX_OUTPUT_TOKENS tokens) or adjust your policy quota.\""
+else
+  echo "Processed unexpectedly (HTTP $HTTP_CODE)."
+fi
+
+echo ""
+echo "Review blocked requests and policy limits in the Cloptima Console:"
+echo "  - Audit Trail: $CONSOLE_AUDIT"
+echo "  - Policies: $CONSOLE_POLICIES"

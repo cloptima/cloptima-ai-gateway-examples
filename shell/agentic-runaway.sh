@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
-# Creates policies with realistic agentic-loop and retry limits and drives
-# real tool-calling conversations against the gateway, showing which turns
-# succeed vs. get blocked.
+# Autonomous agent under runaway protection. The gateway counts tool-call turns and retries from
+# the tool-call transcript already present in each request body, so no client-side tracking or
+# session identifiers are needed.
 #
-# Both limits are derived entirely from the tool-call transcript already
-# present in each request body - the growing sequence of tool calls and
-# results a normal tool-calling client already sends for the model to have
-# any memory of what it already tried. No client-declared session, step, or
-# retry identifiers are involved anywhere below.
+# - maxLoopIterations: completed tool-result turns in the conversation so far.
+# - maxRetryCount: scoped per tool_call_id, so retrying one call and starting a different call
+#   are counted independently.
 #
-# Loop depth counts completed tool-result turns in the conversation so far.
-# Retry count is scoped per tool_call_id, so retrying one specific call and
-# starting a new, different call are counted independently.
-#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the policy and key). See .env.example.
 # Run standalone: ./agentic-runaway.sh
 set -euo pipefail
 
@@ -25,7 +21,6 @@ MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 # Illustrative, not a platform minimum. Bounds: 0-1,000 for both fields.
 MAX_LOOP_ITERATIONS=3
 MAX_RETRY_COUNT=2
-SUFFIX="$(run_suffix)"
 
 CHECK_STATUS_TOOL='{
   "type": "function",
@@ -40,121 +35,82 @@ CHECK_STATUS_TOOL='{
   }
 }'
 
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-LOOP_APP_ID="agentic-loop-$SUFFIX"
-echo "Creating policy with maxLoopIterations=$MAX_LOOP_ITERATIONS..."
-LOOP_POLICY=$(create_policy "$(jq -n --arg name "agentic-loop-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  --argjson loop "$MAX_LOOP_ITERATIONS" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model], maxLoopIterations: $loop}')")
-LOOP_POLICY_ID=$(echo "$LOOP_POLICY" | jq -r '.id')
-
-LOOP_KEY=$(create_virtual_key "$(jq -n --arg name "vk-agentic-loop-$SUFFIX" --arg appId "$LOOP_APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-LOOP_ACCESS_TOKEN=$(echo "$LOOP_KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$LOOP_POLICY_ID" --arg appId "$LOOP_APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted key $(echo "$LOOP_KEY" | jq -r '.id'), bound."
+echo "=== Autonomous Agent: Runaway Loop Protection ==="
 echo ""
 
-# 2. Your application code.
-LOOP_ITERATIONS_TO_SIMULATE=$((MAX_LOOP_ITERATIONS + 2))
-echo "Driving a real tool-calling loop for $LOOP_ITERATIONS_TO_SIMULATE turns..."
-echo ""
+# Governance setup: the policy this application runs under. Platform admins normally create it
+# once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
+# key whose policy already matches.
+get_access "agent-loop-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson loop "$MAX_LOOP_ITERATIONS" --argjson retry "$MAX_RETRY_COUNT" '{
+  name: "agent-loop-policy", mode: "enforce", budgetMode: "hard_fast",
+  allowedProviders: ["vertex_ai"], allowedModels: [$model],
+  maxLoopIterations: $loop, maxRetryCount: $retry}')"
 
+# Application code: one chat-completions turn with a growing transcript.
+agent_turn() {
+  local messages="$1" tool_choice="${2:-auto}"
+  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code}' -X POST "$BASE_URL/v1/ai/chat/completions" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: $USER_AGENT" \
+    -d "$(jq -n --arg model "$MODEL_DEFAULT" --argjson messages "$messages" --argjson tool "$CHECK_STATUS_TOOL" --arg choice "$tool_choice" '
+      {model: $model, messages: $messages, tools: [$tool]}
+      + (if $choice == "force" then {tool_choice: {type: "function", function: {name: "check_status"}}} else {} end)')")
+}
+
+echo "--- Case 1: Runaway Tool Loop (maxLoopIterations=$MAX_LOOP_ITERATIONS) ---"
 MESSAGES='[{"role": "user", "content": "Call check_status for job \"job-42\" and keep checking until it is done."}]'
-for i in $(seq 0 $((LOOP_ITERATIONS_TO_SIMULATE - 1))); do
-  BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson messages "$MESSAGES" --argjson tool "$CHECK_STATUS_TOOL" \
-    '{model: $model, messages: $messages, tools: [$tool], tool_choice: {type: "function", function: {name: "check_status"}}}')
-  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
-    -H "Authorization: Bearer $LOOP_ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
-    -d "$BODY")
-  OUTCOME=$(outcome_for_status "$HTTP_CODE")
-  LAST_HTTP_CODE="$HTTP_CODE"
-  LAST_OUTCOME="$OUTCOME"
-  echo "  [$OUTCOME] turn $i (http $HTTP_CODE)"
-  if [ "$HTTP_CODE" -ne 200 ]; then
+for turn in $(seq 1 $((MAX_LOOP_ITERATIONS + 2))); do
+  echo "[Turn $turn] Agent requesting tool invocation..."
+  agent_turn "$MESSAGES" force
+  if [ "$HTTP_CODE" != "200" ]; then
+    echo ""
+    echo "[Turn $turn] Gateway runaway protection tripped (HTTP $HTTP_CODE)"
+    describe_block
+    echo ""
+    echo "Agent supervisor action: loop terminated. Yielding control to a human operator with the current transcript."
     break
   fi
   TOOL_CALL_ID=$(jq -r '.choices[0].message.tool_calls[0].id' "$RESP_BODY_FILE")
-  TOOL_CALL_NAME=$(jq -r '.choices[0].message.tool_calls[0].function.name' "$RESP_BODY_FILE")
   TOOL_CALL_ARGS=$(jq -r '.choices[0].message.tool_calls[0].function.arguments' "$RESP_BODY_FILE")
-  MESSAGES=$(echo "$MESSAGES" | jq --arg id "$TOOL_CALL_ID" --arg name "$TOOL_CALL_NAME" --arg args "$TOOL_CALL_ARGS" \
-    '. + [
-      {"role": "assistant", "tool_calls": [{"id": $id, "type": "function", "function": {"name": $name, "arguments": $args}}]},
-      {"role": "tool", "tool_call_id": $id, "content": "still running, check again"}
-    ]')
+  echo "  Tool requested: check_status($TOOL_CALL_ARGS)"
+  MESSAGES=$(jq -c --arg id "$TOOL_CALL_ID" --arg args "$TOOL_CALL_ARGS" --arg progress "$((turn * 20))%" '. + [
+    {"role": "assistant", "tool_calls": [{"id": $id, "type": "function", "function": {"name": "check_status", "arguments": $args}}]},
+    {"role": "tool", "tool_call_id": $id, "content": ({status: "pending", progress: $progress} | tojson)}
+  ]' <<<"$MESSAGES")
 done
 
-# 3. What the gateway did.
-confirm_blocked "maxLoopIterations=$MAX_LOOP_ITERATIONS" 403
-
 echo ""
-echo "Confirmed: turns 0-$MAX_LOOP_ITERATIONS served, turn $((MAX_LOOP_ITERATIONS + 1)) blocked"
-echo "(\"exceeds the active Cloptima agent limits\") - counted from the tool-call turns already present in the"
-echo "conversation, not any client-supplied count."
-echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$LOOP_APP_ID\" for the blocked turn."
-echo ""
-
-RETRY_APP_ID="agentic-retry-$SUFFIX"
-echo "Creating policy with maxRetryCount=$MAX_RETRY_COUNT..."
-RETRY_POLICY=$(create_policy "$(jq -n --arg name "agentic-retry-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  --argjson retry "$MAX_RETRY_COUNT" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model], maxRetryCount: $retry}')")
-RETRY_POLICY_ID=$(echo "$RETRY_POLICY" | jq -r '.id')
-
-RETRY_KEY=$(create_virtual_key "$(jq -n --arg name "vk-agentic-retry-$SUFFIX" --arg appId "$RETRY_APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-RETRY_ACCESS_TOKEN=$(echo "$RETRY_KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$RETRY_POLICY_ID" --arg appId "$RETRY_APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted key $(echo "$RETRY_KEY" | jq -r '.id'), bound."
-echo ""
-
-RETRY_ITERATIONS_TO_SIMULATE=$((MAX_RETRY_COUNT + 2))
-echo "Resubmitting the same tool call $RETRY_ITERATIONS_TO_SIMULATE times..."
-echo ""
-
-for i in $(seq 0 $((RETRY_ITERATIONS_TO_SIMULATE - 1))); do
-  BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson tool "$CHECK_STATUS_TOOL" \
-    '{
-      model: $model,
-      messages: [
-        {"role": "user", "content": "Call check_status for job \"job-99\"."},
-        {"role": "assistant", "tool_calls": [{"id": "call-job-99", "type": "function", "function": {"name": "check_status", "arguments": "{\"job_id\": \"job-99\"}"}}]},
-        {"role": "tool", "tool_call_id": "call-job-99", "content": "still running, check again"}
-      ],
-      tools: [$tool]
-    }')
-  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
-    -H "Authorization: Bearer $RETRY_ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
-    -d "$BODY")
-  OUTCOME=$(outcome_for_status "$HTTP_CODE")
-  LAST_HTTP_CODE="$HTTP_CODE"
-  LAST_OUTCOME="$OUTCOME"
-  echo "  [$OUTCOME] attempt $i (http $HTTP_CODE)"
+echo "--- Case 2: Repeated Retry of a Single Tool Call (maxRetryCount=$MAX_RETRY_COUNT) ---"
+retry_transcript() {
+  local call_id="$1"
+  jq -nc --arg id "$call_id" '[
+    {"role": "user", "content": "Call check_status for job \"job-99\"."},
+    {"role": "assistant", "tool_calls": [{"id": $id, "type": "function", "function": {"name": "check_status", "arguments": "{\"job_id\": \"job-99\"}"}}]},
+    {"role": "tool", "tool_call_id": $id, "content": "still running, check again"}
+  ]'
+}
+for attempt in $(seq 1 $((MAX_RETRY_COUNT + 2))); do
+  echo "[Attempt $attempt] Submitting tool result for call-job-99..."
+  agent_turn "$(retry_transcript call-job-99)"
+  if [ "$HTTP_CODE" = "200" ]; then
+    echo "  Allowed"
+  else
+    echo ""
+    echo "[Attempt $attempt] Gateway retry protection tripped (HTTP $HTTP_CODE)"
+    describe_block
+    echo ""
+    echo "Agent supervisor action: max retries reached for call-job-99. Halting retries and reporting the error to the caller."
+    break
+  fi
 done
 
-confirm_blocked "maxRetryCount=$MAX_RETRY_COUNT" 403
+echo ""
+echo "A different tool_call_id starts its own retry count:"
+agent_turn "$(retry_transcript call-job-100)"
+echo "  [call-job-100, first attempt] HTTP $HTTP_CODE"
 
 echo ""
-echo "Confirmed: attempts 0-$MAX_RETRY_COUNT served, attempt $((MAX_RETRY_COUNT + 1)) blocked - counted"
-echo "per tool_call_id, so a different call id gets its own independent count."
-
-OTHER_BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson tool "$CHECK_STATUS_TOOL" \
-  '{
-    model: $model,
-    messages: [
-      {"role": "user", "content": "Call check_status for job \"job-99\"."},
-      {"role": "assistant", "tool_calls": [{"id": "call-job-100", "type": "function", "function": {"name": "check_status", "arguments": "{\"job_id\": \"job-99\"}"}}]},
-      {"role": "tool", "tool_call_id": "call-job-100", "content": "still running, check again"}
-    ],
-    tools: [$tool]
-  }')
-OTHER_HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
-  -H "Authorization: Bearer $RETRY_ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
-  -d "$OTHER_BODY")
-LAST_HTTP_CODE="$OTHER_HTTP_CODE"
-LAST_OUTCOME=$(outcome_for_status "$OTHER_HTTP_CODE")
-echo "  [$LAST_OUTCOME] a different tool_call_id, first attempt (http $OTHER_HTTP_CODE)"
-confirm_allowed "a different tool_call_id starts its own retry count"
-echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$RETRY_APP_ID\" for the blocked attempt."
+echo "Review agent session telemetry in the Cloptima Console:"
+echo "  - Audit Trail: $CONSOLE_AUDIT"
+echo "  - Loop & Retry Policies: $CONSOLE_POLICIES"

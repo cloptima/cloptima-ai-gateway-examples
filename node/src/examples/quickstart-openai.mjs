@@ -1,54 +1,77 @@
-// Simplest possible working call: mint a policy + virtual key, then call the
-// gateway using the official OpenAI SDK. Run standalone:
-//   node src/examples/quickstart-openai.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
-import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { callOpenAIStyle } from '../lib/callGateway.mjs';
-import { confirmAllowed } from '../lib/confirm.mjs';
+/**
+ * Quickstart: Connecting the OpenAI SDK to Cloptima AI Gateway
+ *
+ * Demonstrates standard client integration:
+ * 1. Initialize the official OpenAI SDK with Cloptima's base URL and virtual key.
+ * 2. Send standard and streaming chat completion requests.
+ * 3. Inspect request attribution and token usage.
+ *
+ * Run standalone:
+ *   node src/examples/quickstart-openai.mjs
+ */
+import OpenAI from 'openai';
+import { getAccess } from '../lib/access.mjs';
 import { MODELS } from '../lib/models.mjs';
+import { CONSOLE, config } from '../lib/config.mjs';
 
 async function main() {
-  const suffix = runSuffix();
-  const appId = `quickstart-openai-${suffix}`;
+  console.log('=== Cloptima AI Gateway: OpenAI SDK Quickstart ===\n');
 
-  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
-  console.log(`Creating policy allowing ${MODELS.default} on the managed Vertex AI provider...`);
-  const policy = await createPolicy({
-    name: `quickstart-openai-${suffix}`,
-    mode: 'enforce',
-    budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'],
-    allowedModels: [MODELS.default],
+  // Governance setup: the policy this application runs under. Platform admins normally
+  //    create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+  //    points at a key whose policy already matches.
+  const access = await getAccess({
+    app: 'quickstart-demo',
+    policy: {
+      name: 'quickstart-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
+    },
   });
-  console.log(`  policy ${policy.name} -> ${policy.id}`);
 
-  console.log(`Minting a virtual key attributed to team Quickstart, app ${appId}...`);
-  const key = await createVirtualKey({
-    name: `vk-quickstart-openai-${suffix}`,
-    teamId: 'Quickstart', appId, environment: 'dev',
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  // Tip: In production services where you want to inspect policy/guardrail block details
+  // (such as err.error.violations and err.error.reason), use the client helper from
+  // src/lib/client.mjs which preserves these gateway fields on raised SDK errors.
+  const client = new OpenAI({
+    apiKey: access.virtualKey,
+    baseURL: `${config.baseUrl}/v1/ai`, // the SDK appends /chat/completions
   });
-  console.log(`  key ${key.id}`);
 
-  console.log(`Binding the policy to app ${appId} - the gateway serves only requests a bound policy covers...`);
-  await createBinding({ policyId: policy.id, teamId: 'Quickstart', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log('Bound. Calling the gateway with the official OpenAI SDK...');
-
-  // 2. Your application code - the official OpenAI SDK, unchanged.
-  const client = openaiStyleClient(key.accessToken, config.baseUrl);
-  const result = await callOpenAIStyle(client, {
+  // 1. Standard Chat Completion
+  console.log('--- 1. Standard Chat Completion ---');
+  const completion = await client.chat.completions.create({
     model: MODELS.default,
-    prompt: 'In one sentence, confirm this call went through Cloptima\'s managed AI gateway.',
-    label: 'quickstart-openai',
+    messages: [
+      { role: 'system', content: 'You are a helpful cloud engineer.' },
+      { role: 'user', content: 'Explain what an AI gateway does in one clear sentence.' },
+    ],
   });
 
-  // 3. What the gateway did.
-  console.log(`\n[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
-  confirmAllowed(result, 'quickstart call through a bound virtual key');
-  console.log(`\nEvidence: Explorer tab (${CONSOLE.spend}) - find this request_id to see attributed spend and usage.`);
+  console.log(`Assistant: ${completion.choices[0].message.content.trim()}`);
+  console.log(`Tokens: ${completion.usage?.total_tokens} (prompt: ${completion.usage?.prompt_tokens}, completion: ${completion.usage?.completion_tokens})`);
+  console.log(`Request ID: ${completion.id}\n`);
+
+  // 2. Streaming Chat Completion
+  console.log('--- 2. Streaming Chat Completion ---');
+  const stream = await client.chat.completions.create({
+    model: MODELS.default,
+    messages: [{ role: 'user', content: 'Count from 1 to 5 with commas.' }],
+    stream: true,
+  });
+
+  process.stdout.write('Assistant: ');
+  for await (const chunk of stream) {
+    process.stdout.write(chunk.choices[0]?.delta?.content || '');
+  }
+  console.log('\n');
+
+  console.log(`View live spend, latency, and attribution in the console: ${CONSOLE.spend}`);
 }
 
 main().catch((err) => {
-  console.error('quickstart-openai failed:', err);
+  console.error('Quickstart failed:', err.message);
   process.exitCode = 1;
 });

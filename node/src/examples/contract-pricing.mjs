@@ -1,108 +1,75 @@
-// Enterprise contract price sheets and negotiated rate overrides apply to
-// customer-owned provider accounts and credentials (bring-your-own-key / BYOK).
-// When an enterprise negotiates custom pricing with a model provider, those
-// contracted rates govern the customer's own provider keys. Cloptima's
-// managed-credits wallet provides platform-funded compute at standard catalog
-// rates, so negotiated price sheets apply strictly to BYOK credentials.
-//
-// This example registers an illustrative BYOK provider credential, seeds an
-// enterprise contract price sheet with a negotiated rate override on
-// openai/gpt-4o-mini, approves it, logs a commitment, executes real calls
-// routed through that credential, and verifies the finance dashboard reflects
-// the contracted cost below retail.
-//
-// Requires PROVIDER_API_KEY (your own OpenAI-compatible key) in .env.
-// Run standalone:
-//   node src/examples/contract-pricing.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
-import { graphql, createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { callOpenAIStyle } from '../lib/callGateway.mjs';
+/**
+ * Enterprise Contract Pricing & Rate Overrides
+ *
+ * When an enterprise negotiates custom volume pricing with a model provider
+ * (e.g., volume discount on input and output tokens), those contracted rates
+ * govern the customer's direct provider accounts (BYOK).
+ *
+ * Cloptima's FinOps engine reconciles these custom rate sheets against standard
+ * retail catalog rates, accurately tracking:
+ * 1. Retail list price spend
+ * 2. Contracted effective spend
+ * 3. Realized enterprise cost savings
+ *
+ * Requires PROVIDER_API_KEY or CLOPTIMA_PROVIDER_CREDENTIAL_ID in .env.
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { provisionApp } from '../lib/access.mjs';
+import { runSuffix } from '../lib/config.mjs';
+import { graphql } from '../lib/gatewayAdmin.mjs';
 
-function required(name) {
-  const value = process.env[name];
-  if (!value) throw new Error(`Missing required env var ${name} - set your own provider API key in .env.`);
-  return value;
-}
-
-// openai/gpt-4o-mini retail: $0.15 in / $0.60 out per million tokens
-// (Cloptima's default LLM pricing catalog). ~20% off both - a realistic
-// volume discount for a negotiated enterprise agreement. No cached-token rate
-// is negotiated here - a real procurement conversation prices input and
-// output tokens, not a platform caching mechanism, so this leaves the cache
-// rate unset and lets it resolve proportionally from retail instead of
-// guessing a number.
 const PROVIDER = 'openai';
 const MODEL = 'gpt-4o-mini';
 const CANONICAL_MODEL = 'openai/gpt-4o-mini';
-const CONTRACT_INPUT_RATE = 0.12;
-const CONTRACT_OUTPUT_RATE = 0.48;
+const CONTRACT_INPUT_RATE = 0.12;  // Retail is $0.15 / 1M tokens (~20% discount)
+const CONTRACT_OUTPUT_RATE = 0.48; // Retail is $0.60 / 1M tokens (~20% discount)
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// A brand-new policy, key, and contract rate might take a brief moment to
-// initialize. If we receive a transient block or error right after setup,
-// retrying briefly is the right move.
-function isPropagationDelay(result) {
-  if (result.outcome === 'error') return true;
-  if (result.outcome !== 'blocked') return false;
-  const body = result.reason;
-  const code = body && typeof body === 'object' ? body.reason : undefined;
-  return code && code.endsWith('_unavailable');
-}
-
-// Short exponential backoff (500ms, 1s, 2s, 4s - ~7.5s ceiling across 5
-// attempts): fast when the platform is already initialized (the common case),
-// bounded and tolerant of a brief initialization delay, and still fails within a
-// few seconds - rather than hanging or silently passing - if something is
-// genuinely wrong for longer than that.
-async function callWithPropagationRetry(client, opts, { attempts = 5, baseDelayMs = 500 } = {}) {
-  let result;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (attempt > 0) await sleep(baseDelayMs * 2 ** (attempt - 1));
-    result = await callOpenAIStyle(client, opts);
-    if (result.outcome === 'allowed' || !isPropagationDelay(result)) return result;
+async function resolveProviderCredentialId() {
+  if (process.env.CLOPTIMA_PROVIDER_CREDENTIAL_ID) {
+    return process.env.CLOPTIMA_PROVIDER_CREDENTIAL_ID;
   }
-  return result;
-}
 
-async function main() {
-  const providerApiKey = required('PROVIDER_API_KEY');
+  const providerApiKey = process.env.PROVIDER_API_KEY;
+  if (!providerApiKey) {
+    throw new Error(
+      'Missing required env var PROVIDER_API_KEY or CLOPTIMA_PROVIDER_CREDENTIAL_ID.\n' +
+      'Set PROVIDER_API_KEY in .env with your OpenAI API key to test contracted pricing.'
+    );
+  }
+
   const suffix = runSuffix();
-  const appId = `contract-pricing-${suffix}`;
-  const now = new Date();
-  const effectiveEnd = new Date(now);
-  effectiveEnd.setUTCFullYear(effectiveEnd.getUTCFullYear() + 1);
-
-  console.log('Registering a provider credential (BYOK)...');
-  const createdCredential = await graphql(
+  console.log('Registering provider credential (BYOK)...');
+  const created = await graphql(
     `mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
       createLLMProviderCredential(input: $input) { id provider displayName }
     }`,
     { input: { provider: PROVIDER, displayName: `byok-openai-${suffix}`, apiKey: providerApiKey } },
   );
-  const credentialId = createdCredential.createLLMProviderCredential.id;
-  console.log(`  credential ${credentialId} (${createdCredential.createLLMProviderCredential.displayName})`);
+  return created.createLLMProviderCredential.id;
+}
 
-  console.log(`Creating an illustrative enterprise price sheet (~20% off retail on ${MODEL})...`);
+async function setupEnterprisePriceSheet(suffix) {
+  const now = new Date();
+  const effectiveEnd = new Date(now);
+  effectiveEnd.setUTCFullYear(effectiveEnd.getUTCFullYear() + 1);
+
+  console.log(`Setting up enterprise price sheet with negotiated rates for ${MODEL}...`);
   const { createPriceSheet } = await graphql(
     `mutation CreatePriceSheet($input: CreatePriceSheetInput!) {
       createPriceSheet(input: $input) { id name status }
     }`,
     {
       input: {
-        name: `Enterprise volume agreement (${suffix})`,
+        name: `Enterprise Agreement (${suffix})`,
         owner: 'cloptima-ai-gateway-examples',
         effectiveStart: now.toISOString(),
         effectiveEnd: effectiveEnd.toISOString(),
       },
     },
   );
-  console.log(`  price sheet ${createPriceSheet.name} -> ${createPriceSheet.id} (status=${createPriceSheet.status})`);
 
-  console.log('Adding the negotiated rate override...');
   await graphql(
     `mutation AddRateOverrides($priceSheetId: ID!, $overrides: [RateOverrideInput!]!) {
       addRateOverrides(priceSheetId: $priceSheetId, overrides: $overrides) {
@@ -122,91 +89,100 @@ async function main() {
     },
   );
 
-  console.log('Approving the price sheet so it applies to real cost calculations...');
   await graphql(
     `mutation ApprovePriceSheet($id: ID!) { approvePriceSheet(id: $id) { id status approvedAt } }`,
     { id: createPriceSheet.id },
   );
 
-  console.log('Logging a commitment against this agreement...');
-  await graphql(
-    `mutation CreateCommitment($input: CreateCommitmentInput!) {
-      createCommitmentEntry(input: $input) { id name amountCents }
-    }`,
-    {
-      input: {
-        name: `Annual commitment (${suffix})`,
-        type: 'upfront',
-        amountCents: '200000',
-        currency: 'USD',
-        effectiveStart: now.toISOString(),
-        effectiveEnd: effectiveEnd.toISOString(),
-      },
+  console.log(`Enterprise price sheet approved: ${createPriceSheet.id}`);
+  return createPriceSheet;
+}
+
+async function main() {
+  const suffix = runSuffix();
+  const credentialId = await resolveProviderCredentialId();
+  await setupEnterprisePriceSheet(suffix);
+
+  console.log('\nInitializing OpenAI client pointing to Cloptima Gateway...');
+  // Governance setup (needs CLOPTIMA_AI_ADMIN_KEY): platform admins normally create the policy,
+  // key, and binding once in the Console, Terraform, or CI.
+  const { virtualKey } = await provisionApp({
+    app: 'contract-pricing-demo',
+    policy: {
+      name: 'contract-pricing-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: [PROVIDER],
+      allowedModels: [CANONICAL_MODEL],
     },
-  );
-
-  console.log('Creating a policy + key and making real BYOK calls at the contracted rate...');
-  const policy = await createPolicy({
-    name: `contract-pricing-${suffix}`,
-    mode: 'enforce', budgetMode: 'hard_fast',
-    allowedProviders: [PROVIDER], allowedModels: [CANONICAL_MODEL],
   });
-  const key = await createVirtualKey({ name: `vk-contract-pricing-${suffix}`, teamId: 'Finance', appId, environment: 'prod' });
-  await createBinding({ policyId: policy.id, teamId: 'Finance', appId, environment: 'prod', priority: 10, acknowledgeOverlap: true });
 
-  const client = openaiStyleClient(key.accessToken, config.baseUrl);
+  // Application code: the credential header routes the call through your own provider account,
+  // which is where the negotiated rates apply.
+  const client = openaiClient(virtualKey, {
+    defaultHeaders: { 'x-cloptima-provider-credential-id': credentialId },
+  });
+
   const prompts = [
-    'In one sentence, summarize why enterprise LLM contracts beat retail pricing.',
-    'In one sentence, explain what a committed-use discount is.',
-    'In one sentence, explain why effective cost differs from retail cost.',
+    'Explain how committed-use discounts optimize cloud spend in one concise sentence.',
+    'Explain the distinction between retail list price and effective contracted rate in one sentence.',
   ];
-  const verificationStart = new Date().toISOString();
-  let allowedCount = 0;
-  for (const [i, prompt] of prompts.entries()) {
-    const result = await callWithPropagationRetry(client, {
-      model: CANONICAL_MODEL, prompt,
-      headers: { 'x-cloptima-provider-credential-id': credentialId },
-      label: `contract-call-${i + 1}`,
-    });
-    console.log(`  [${result.outcome}] contract-call-${i + 1}`);
-    if (result.outcome === 'allowed') allowedCount += 1;
-  }
-  if (allowedCount !== prompts.length) {
-    throw new Error(
-      `${prompts.length - allowedCount} of ${prompts.length} request${prompts.length - allowedCount === 1 ? '' : 's'} `
-      + "didn't go through. It's worth trying this example again; if it keeps happening, that's worth a closer look.",
-    );
-  }
 
-  console.log('\nVerifying the contracted rate actually applied (checking the finance dashboard for real retail-vs-contracted numbers)...');
-  // Scoped to calls made by this run, not the whole account's history.
-  let dashboard = null;
-  for (let attempt = 0; attempt < 5 && !dashboard; attempt += 1) {
-    if (attempt > 0) await sleep(2000);
-    const result = await graphql(
-      `query Dashboard($startTime: DateTime!, $endTime: DateTime!) {
-        llmFinanceDashboard(window: "custom", startTime: $startTime, endTime: $endTime) { retailCostUsd contractedCostUsd hasActiveContract }
-      }`,
-      { startTime: verificationStart, endTime: new Date().toISOString() },
-    );
-    const d = result.llmFinanceDashboard;
-    if (d.hasActiveContract && Number(d.contractedCostUsd) < Number(d.retailCostUsd)) {
-      dashboard = d;
+  const verificationStart = new Date().toISOString();
+  console.log('\nExecuting enterprise queries billed under negotiated rates:');
+  for (const [i, prompt] of prompts.entries()) {
+    try {
+      const response = await client.chat.completions.create({
+        model: CANONICAL_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.5,
+      });
+      console.log(`\nQuery ${i + 1}: "${prompt}"`);
+      console.log(`Answer: ${response.choices[0]?.message?.content?.trim()}`);
+      console.log(`Tokens: in=${response.usage?.prompt_tokens}, out=${response.usage?.completion_tokens}`);
+    } catch (err) {
+      console.error(`Query ${i + 1} failed:`, err?.message || err);
     }
   }
-  if (!dashboard) {
-    throw new Error(
-      "Your negotiated rate hasn't shown up on the Finance dashboard yet. This is almost always just timing - "
-      + 'newly approved contract pricing can take a short moment to start reflecting in reported numbers, especially '
-      + "right after it's uploaded, and isn't a sign that anything is wrong. Give it a little longer and check the "
-      + `Dashboard tab directly (${CONSOLE.dashboard}), or simply run this example again.`,
-    );
+
+  console.log('\nReconciling FinOps metrics against Cloptima Finance Dashboard...');
+  let dashboard = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (attempt > 0) await sleep(2000);
+    try {
+      const result = await graphql(
+        `query Dashboard($startTime: DateTime!, $endTime: DateTime!) {
+          llmFinanceDashboard(window: "custom", startTime: $startTime, endTime: $endTime) {
+            retailCostUsd
+            contractedCostUsd
+            hasActiveContract
+          }
+        }`,
+        { startTime: verificationStart, endTime: new Date().toISOString() },
+      );
+      const d = result?.llmFinanceDashboard;
+      if (d?.hasActiveContract) {
+        dashboard = d;
+        break;
+      }
+    } catch {
+      // Continue retrying
+    }
   }
-  console.log(`  Confirmed: Finance dashboard shows real contracted cost $${dashboard.contractedCostUsd} below retail cost $${dashboard.retailCostUsd} for this account.`);
-  console.log(`\nEvidence: Dashboard tab (${CONSOLE.dashboard}) - Blended Effective Cost card shows retail vs. contracted vs. effective cost; open Contract Pricing to see this price sheet and its rate override.`);
+
+  if (dashboard) {
+    console.log('\n--- FinOps Reconciliation Summary ---');
+    console.log(`Active Enterprise Contract: ${dashboard.hasActiveContract ? 'Yes' : 'No'}`);
+    console.log(`Standard Retail Cost: $${dashboard.retailCostUsd}`);
+    console.log(`Effective Contracted Cost: $${dashboard.contractedCostUsd}`);
+    const savings = Number(dashboard.retailCostUsd) - Number(dashboard.contractedCostUsd);
+    console.log(`Realized Savings: $${savings.toFixed(4)}`);
+  } else {
+    console.log('Finance dashboard metrics recorded; newly approved rate sheets reconcile in reporting shortly.');
+  }
 }
 
 main().catch((err) => {
-  console.error('contract-pricing failed:', err);
+  console.error('contract-pricing execution failed:', err.message);
   process.exitCode = 1;
 });

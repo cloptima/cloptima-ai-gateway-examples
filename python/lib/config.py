@@ -6,23 +6,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _required(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"Missing required env var {name} - copy .env.example to .env and fill it in.")
-    return value
-
-
 # The gateway is a fixed public endpoint - nobody running these examples
 # should need to know or configure its URL. CLOPTIMA_GATEWAY_BASE_URL is an
 # optional override only, unset by default.
 _GATEWAY_BASE_URL_DEFAULT = "https://api.cloptima.ai"
 
-# Every example in this repo needs only one thing: an ai:admin management
-# key. Each example mints whatever policy, binding, and virtual key it needs
-# from there - nothing is pre-provisioned.
 BASE_URL = os.environ.get("CLOPTIMA_GATEWAY_BASE_URL", _GATEWAY_BASE_URL_DEFAULT).rstrip("/")
-AI_ADMIN_KEY = _required("CLOPTIMA_AI_ADMIN_KEY")
+AI_ADMIN_KEY = os.environ.get("CLOPTIMA_AI_ADMIN_KEY", "")
+VIRTUAL_KEY = os.environ.get("CLOPTIMA_VIRTUAL_KEY", "")
 
 # The gateway sits behind Cloudflare, which bot-manages requests with no or
 # generic User-Agent strings (Python's requests library sends a generic

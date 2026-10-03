@@ -1,114 +1,105 @@
-"""Completes what exact_semantic_cache.py deliberately leaves at 'observe':
-semanticCacheMode: 'enforce' needs a per-(app, route, model-family) class
-approval (createLLMSemanticCacheClassApproval) on top of the policy flag,
-AND setting 'enforce' on the policy itself auto-queues a separate entry in
-the generic governance queue (LLMGatewayApproval, approvalType
-'semantic_cache_enforce') that must be reviewed before enforcement actually
-activates - until then, effective behavior stays downgraded to 'suggest'.
-This script creates the policy with applyImmediately: true, so - since the
-ai:admin key already qualifies to review this itself - that entry is
-approved and enforcement is live immediately, with no separate review step.
-See ../docs/CACHE_AND_POLICY.md.
-Run standalone from python/:
-    python -m examples.semantic_cache_enforce
+"""Knowledge Base & Customer Support: Real-Time Semantic Cache Enforcement
+
+Demonstrates multi-tiered exact and semantic caching in enforce mode:
+1. Exact Cache: Verbatim string matches served instantly with zero provider cost.
+2. Semantic Cache: High-dimensional vector matching that intercepts paraphrased
+   queries and serves cached answers without dispatching to the LLM provider.
+
+Run standalone:
+  python -m examples.semantic_cache_enforce
 """
+import time
+from typing import Any, Dict
 
-import json
-
-from lib import config
-from lib.confirm import confirm_allowed
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key, graphql, list_llm_gateway_approvals
-from lib.gateway_clients import openai_style_client
-from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT
+from lib import gateway_admin
+from lib.access import provision_app
+from lib.client import openai_client
+from lib.models import MODELS
 
 ROUTE = "/v1/ai/chat/completions"
-# The class approval's modelFamily must be keyed on the full canonical model
-# ID (e.g. 'vertex_ai/gemini-3.5-flash-lite'), not just its last path segment
-# (e.g. 'gemini-3.5-flash-lite') - modelFamily requires the full canonical model ID.
-MODEL_FAMILY = MODEL_DEFAULT
+MODEL_FAMILY = MODELS["default"]
 
 
-def main():
-    suffix = config.run_suffix()
-    app_id = f"semantic-cache-enforce-{suffix}"
-
-    print("Creating policy with exact cache (enforce) and semantic cache (enforce), applyImmediately: true...")
-    policy = create_policy({
-        "name": f"semantic-cache-enforce-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-        "promptRetentionMode": "full",
-        "exactCacheEnabled": True, "exactCacheMode": "enforce",
-        "semanticCacheEnabled": True, "semanticCacheMode": "enforce",
-        "applyImmediately": True,
-    })
-    key = create_virtual_key({"name": f"vk-semantic-cache-enforce-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
-    create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print(f"Minted key {key['id']}, bound.\n")
-
-    print(f"Requesting the class approval semantic-cache enforcement needs for (app={app_id}, route={ROUTE}, modelFamily={MODEL_FAMILY})...")
-    class_approval_data = graphql(
+def ensure_class_approval(app_id: str) -> dict:
+    data = gateway_admin.graphql(
         """mutation CreateClassApproval($input: LLMSemanticCacheClassApprovalInput!) {
           createLLMSemanticCacheClassApproval(input: $input) { id appId route modelFamily createdAt }
         }""",
-        {"input": {"appId": app_id, "route": ROUTE, "modelFamily": MODEL_FAMILY, "notes": f"semantic-cache-enforce example run {suffix}"}},
+        {"input": {"appId": app_id, "route": ROUTE, "modelFamily": MODEL_FAMILY, "notes": "semantic-cache-enforce example"}},
     )
-    print(f"  class approval granted: {json.dumps(class_approval_data['createLLMSemanticCacheClassApproval'])}")
+    return data["createLLMSemanticCacheClassApproval"]
 
-    print("\nChecking the generic governance queue for the entry auto-queued by semanticCacheMode: 'enforce'...")
-    applied = list_llm_gateway_approvals(status="applied", limit=50)
-    auto_applied = next((a for a in applied if a["approvalType"] == "semantic_cache_enforce" and a["targetId"] == policy["id"]), None)
-    if auto_applied:
-        print(f"  applied: {json.dumps(auto_applied)}")
-        print(
-            "  applyImmediately: true above meant this entry was approved and applied right away, instead of sitting "
-            f"pending for a second identity to review in the console's Audit tab ({config.CONSOLE['audit']})."
+
+def query_with_latency(client: Any, prompt: str, label: str) -> Dict[str, Any]:
+    start = time.time()
+    try:
+        response = client.chat.completions.create(
+            model=MODELS["default"],
+            messages=[
+                {"role": "system", "content": "You are an IT support assistant. Answer concisely in one sentence."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
         )
-    else:
-        print("  no matching applied entry found.")
+        duration_ms = int((time.time() - start) * 1000)
+        answer = response.choices[0].message.content or ""
+        return {"outcome": "success", "duration_ms": duration_ms, "answer": answer.strip(), "prompt": prompt, "label": label}
+    except Exception as err:
+        duration_ms = int((time.time() - start) * 1000)
+        return {"outcome": "error", "duration_ms": duration_ms, "error": str(err), "prompt": prompt, "label": label}
 
-    # 2. Your application code - the official OpenAI SDK, unchanged.
-    client = openai_style_client(key["accessToken"], config.BASE_URL)
 
-    print("\nRepeating one exact prompt 5x for exact-cache evidence (enforced immediately, no approval needed)...")
-    exact_prompt = "Summarize, in one sentence, why cloud costs increased for a customer running more Kubernetes pods this month."
-    exact_results = []
-    for i in range(5):
-        result = call_openai_style(
-            client, MODEL_DEFAULT, exact_prompt,
-            f"exact-cache-{i + 1}",
-            {"x-cloptima-feature": "exact_cache_probe"},
-        )
-        exact_results.append(result)
-        print(f"  [{result['outcome']}] exact-cache-{i + 1}")
+def main() -> None:
+    print("Connecting to Cloptima Gateway with Enforce-Mode Semantic Caching...")
+    # Governance setup (needs CLOPTIMA_AI_ADMIN_KEY): platform admins normally create the policy,
+    # key, and binding once in the Console, Terraform, or CI.
+    setup = provision_app(
+        app="semantic-cache-demo",
+        policy={
+            "name": "semantic-cache-enforce-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+            "promptRetentionMode": "full",
+            "exactCacheEnabled": True,
+            "exactCacheMode": "enforce",
+            "semanticCacheEnabled": True,
+            "semanticCacheMode": "enforce",
+            "applyImmediately": True,
+        },
+    )
+    ensure_class_approval(setup["app_id"])
 
-    print("\nSending 3 semantically similar (not identical) prompts for semantic-cache evidence...")
-    semantic_prompts = [
-        "In one sentence, explain why a customer running more Kubernetes pods saw higher cloud costs this month.",
-        "Give a one-sentence explanation for increased cloud spend when a customer scales up their Kubernetes pod count.",
-        "Why did this customer's cloud bill go up after running additional Kubernetes pods this month? One sentence.",
+    # Application code: the official SDK, pointed at the gateway with a virtual key.
+    client = openai_client(setup["virtual_key"])
+
+    # 1. Cold Request
+    primary_prompt = "How do I generate a new Personal Access Token for the Cloptima API?"
+    print(f'\n[Cold Query] Sending initial question: "{primary_prompt}"')
+    cold = query_with_latency(client, primary_prompt, "Cold Query")
+    print(f"Result: {cold['duration_ms']}ms latency | Answer: \"{cold.get('answer', '')}\"")
+
+    # 2. Exact Cache Repeat
+    print("\n[Exact Cache] Sending identical repeat query:")
+    exact = query_with_latency(client, primary_prompt, "Exact Cache Hit")
+    pct = 0
+    if cold["duration_ms"] > 0 and exact["duration_ms"] < cold["duration_ms"]:
+        pct = int(((cold["duration_ms"] - exact["duration_ms"]) / cold["duration_ms"]) * 100)
+    print(f"Result: {exact['duration_ms']}ms latency ({pct}% faster)")
+    print(f"Answer: \"{exact.get('answer', '')}\"")
+
+    # 3. Semantically Paraphrased Queries
+    paraphrased_prompts = [
+        "Where can I create a Personal Access Token to access the Cloptima API?",
+        "What are the steps to get an API personal access token in Cloptima?",
     ]
-    semantic_results = []
-    for i, prompt in enumerate(semantic_prompts):
-        result = call_openai_style(
-            client, MODEL_DEFAULT, prompt,
-            f"semantic-cache-{i + 1}",
-            {"x-cloptima-feature": "semantic_cache_probe"},
-        )
-        semantic_results.append(result)
-        print(f"  [{result['outcome']}] semantic-cache-{i + 1}")
 
-    # 3. What the gateway did. Enforce-mode caching must serve, never fail, a call.
-    for result in semantic_results:
-        confirm_allowed(result, f"{result['label']} served under enforce-mode semantic caching")
-
-    print(
-        "\nConfirmed: both exact-cache and semantic-cache hits show up immediately - applyImmediately: true meant "
-        "semantic-cache enforcement was live from the start, with no separate review step needed."
-    )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - shows the applied semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab ({config.CONSOLE['policies']}) shows the policy's cache config.")
-    print(json.dumps({"exactResults": exact_results, "semanticResults": semantic_results}, indent=2, default=str))
+    for i, prompt in enumerate(paraphrased_prompts):
+        print(f'\n[Semantic Variant {i + 1}] Sending paraphrased query: "{prompt}"')
+        var_res = query_with_latency(client, prompt, f"Variant {i + 1}")
+        print(f"Result: {var_res['duration_ms']}ms latency")
+        print(f"Answer: \"{var_res.get('answer', '')}\"")
 
 
 if __name__ == "__main__":

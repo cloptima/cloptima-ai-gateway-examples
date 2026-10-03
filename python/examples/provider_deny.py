@@ -1,48 +1,91 @@
-"""Creates a Vertex-only policy and requests a non-Vertex model through it,
-showing a provider-scope block rather than a silent fallback.
-Run standalone from python/:
-    python -m examples.provider_deny
+"""Provider Restriction & Data Residency Enforcement
+
+Demonstrates how enterprise policies enforce approved provider boundaries
+(e.g. Vertex AI only for data residency/compliance), and how an application
+catches and recovers from unauthorized provider requests.
+
+Pattern:
+1. Policy enforces allowedProviders: ['vertex_ai'].
+2. Application attempts calling an unauthorized provider (e.g. openai/gpt-4o).
+3. Gateway blocks before provider egress (HTTP 403).
+4. Application catches the block and falls back to an authorized model.
+
+Run standalone:
+  python -m examples.provider_deny
 """
+from openai import APIStatusError
 
-import json
-
-from lib import config
-from lib.confirm import confirm_blocked
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key
-from lib.gateway_clients import openai_style_client
-from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT
+from lib.access import get_access
+from lib.client import openai_client
+from lib.config import CONSOLE
+from lib.models import MODELS
 
 
-def main():
-    suffix = config.run_suffix()
-    app_id = f"provider-deny-{suffix}"
+def main() -> None:
+    print("=== Enterprise Compliance: Provider Boundary Enforcement ===\n")
 
-    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
-    print("Creating a Vertex-only policy...")
-    policy = create_policy({
-        "name": f"provider-deny-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-    })
-    key = create_virtual_key({"name": f"vk-provider-deny-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
-    create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print(f"Minted key {key['id']}, bound. Requesting a non-Vertex model through it...\n")
-
-    # 2. Your application code - the official OpenAI SDK, unchanged.
-    client = openai_style_client(key["accessToken"], config.BASE_URL)
-    result = call_openai_style(
-        client, "openai/gpt-4o",
-        "This call should be denied - non-Vertex provider.",
-        "provider-deny-probe",
+    # Governance setup: a compliance policy that allows only Vertex AI. Platform admins normally
+    # create it once in the Console, Terraform, or CI. Skipped when CLOPTIMA_VIRTUAL_KEY points at
+    # a key whose policy already matches.
+    access = get_access(
+        app="provider-boundary-demo",
+        policy={
+            "name": "provider-boundary-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+        },
     )
 
-    # 3. What the gateway did. confirm_blocked stops the script if the policy
-    # above was not held, so a silent regression cannot print as a success.
-    print(f"[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
-    confirm_blocked(result, "allowedProviders=[vertex_ai]", status=403, violation="provider is not allowed")
-    print(f"\nConfirmed: blocked ({result.get('status')}) - the policy only allows vertex_ai, so a non-Vertex model is denied before provider egress.")
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by app \"{app_id}\" for the provider-scope block record.")
+    # Application code: the official SDK, pointed at the gateway with a virtual key.
+    client = openai_client(access["virtual_key"])
+
+    print('Policy active: Only "vertex_ai" is permitted.\n')
+
+    # Case 1: Application requests an unauthorized provider
+    print("--- Step 1: Requesting Unauthorized Provider (openai/gpt-4o) ---")
+    fallback_needed = False
+
+    try:
+        client.chat.completions.create(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Process confidential compliance record."}],
+        )
+        print("Assistant: (Processed unexpectedly)\n")
+    except APIStatusError as err:
+        if err.status_code == 403:
+            body = err.body if isinstance(err.body, dict) else {}
+            reason = body.get("reason", str(err))
+            violations = body.get("violations", [])
+
+            print("🛡️ Gateway Compliance Block (HTTP 403)")
+            print(f"  Message: {reason}")
+            if violations:
+                print(f"  Violations: {', '.join(violations)}")
+            print("\nApplication Recovery:")
+            print("  Non-compliant provider request intercepted. Automatically routing to authorized Vertex AI model...\n")
+            fallback_needed = True
+        else:
+            raise
+
+    # Case 2: Recovery via approved compliant model
+    if fallback_needed:
+        print(f"--- Step 2: Fallback to Approved Model ({MODELS['default']}) ---")
+        try:
+            recovery_response = client.chat.completions.create(
+                model=MODELS["default"],
+                messages=[{"role": "user", "content": "Process confidential compliance record."}],
+            )
+            content = recovery_response.choices[0].message.content or ""
+            print(f'Assistant: "{content.strip()}"')
+            print("✓ Workload successfully fulfilled on compliant infrastructure.\n")
+        except Exception as err:
+            print(f"Recovery failed: {err}")
+
+    print("Review provider restriction audit logs in Cloptima Console:")
+    print(f"  - Audit Trail: {CONSOLE['audit']}")
+    print(f"  - Policies: {CONSOLE['policies']}")
 
 
 if __name__ == "__main__":

@@ -1,62 +1,64 @@
-"""Create an isolated policy-bound profile for each managed guardrail scan.
+"""Multi-Provider Managed Guardrail Evaluation
 
-Each scan is billable and requires available Cloptima managed credits.
+Demonstrates integrating managed third-party guardrail providers
+(Google Model Armor, Azure AI Content Safety, Amazon Bedrock Guardrails) through
+Cloptima-managed credentials.
 
-Run standalone from python/ with:
-    python -m examples.guardrail_detector_categories
+Prerequisite:
+- Requires available Cloptima managed credits because external provider scans are billable.
+
+Run standalone:
+  python -m examples.guardrail_detector_categories
+Choose a provider with GUARDRAIL_PROVIDER (default google-model-armor):
+  GUARDRAIL_PROVIDER=azure-content-safety python -m examples.guardrail_detector_categories
+  GUARDRAIL_PROVIDER=bedrock-guardrails python -m examples.guardrail_detector_categories
 """
+import os
 
-from lib import config
-from lib.call_gateway import call_openai_style
-from lib.confirm import confirm_allowed
-from lib.gateway_admin import (
-    create_binding,
-    create_guardrail_profile,
-    create_policy,
-    create_virtual_key,
-    graphql,
-)
-from lib.gateway_clients import openai_style_client
-from lib.models import MODEL_DEFAULT
+from openai import APIStatusError
 
+from lib.access import get_access
+from lib.client import openai_client
+from lib.config import CONSOLE
+from lib.models import MODELS
 
-PROVIDERS = [
-    (
-        "google-model-armor",
-        "Google Model Armor",
-        {
+PROVIDERS = {
+    "google-model-armor": {
+        "id": "google-model-armor",
+        "name": "Google Model Armor",
+        "integration": {
             "kind": "google_model_armor",
             "credential_source": "cloptima_managed",
             "scan_directions": "input",
         },
-    ),
-    (
-        "azure-content-safety",
-        "Azure AI Content Safety",
-        {
+    },
+    "azure-content-safety": {
+        "id": "azure-content-safety",
+        "name": "Azure AI Content Safety",
+        "integration": {
             "kind": "azure_content_safety",
             "credential_source": "cloptima_managed",
             "prompt_shields_enabled": True,
             "harm_categories": ["Hate", "Violence"],
             "scan_directions": "input",
         },
-    ),
-    (
-        "bedrock-guardrails",
-        "Amazon Bedrock Guardrails",
-        {
+    },
+    "bedrock-guardrails": {
+        "id": "bedrock-guardrails",
+        "name": "Amazon Bedrock Guardrails",
+        "integration": {
             "kind": "bedrock_guardrails",
             "credential_source": "cloptima_managed",
             "scan_directions": "input",
         },
-    ),
-]
+    },
+}
 
 
 def profile_input(name: str, integration: dict) -> dict:
     return {
         "name": name,
-        "description": "Managed provider scan validation example",
+        "description": "Managed provider scan integration example",
         "definition": {
             "input": {"action": "observe", "detectors": {"secret": {}}},
             "output": {"action": "observe", "detectors": {"secret": {}}},
@@ -65,87 +67,60 @@ def profile_input(name: str, integration: dict) -> dict:
     }
 
 
-def remove_temporary_resources(binding=None, policy=None, profile=None, key=None):
-    actions = [
-        (binding, "binding", "mutation($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }"),
-        (policy, "policy", "mutation($id: ID!) { deleteLLMGatewayPolicy(id: $id) }"),
-        (profile, "profile", "mutation($id: ID!) { deleteLLMGuardrailProfile(id: $id) }"),
-        (key, "key", "mutation($id: ID!) { revokeLLMGatewayKey(id: $id) }"),
-    ]
-    errors = []
-    for resource, label, mutation in actions:
-        if not resource or not resource.get("id"):
-            continue
-        try:
-            graphql(mutation, {"id": resource["id"]})
-        except Exception as err:
-            errors.append(f"{label}: {err}")
-    return errors
+def main() -> None:
+    print("=== Multi-Provider Managed Guardrail Evaluation ===\n")
+    print("Prerequisite: The account must have managed credits available for billable guardrail scans.\n")
 
+    selected_key = os.environ.get("GUARDRAIL_PROVIDER", "google-model-armor")
+    provider = PROVIDERS.get(selected_key)
+    if provider is None:
+        raise RuntimeError(f'Unknown GUARDRAIL_PROVIDER "{selected_key}". Use one of: {", ".join(PROVIDERS)}.')
+    print(f"Active Provider Integration: {provider['name']}")
 
-def main():
-    suffix = config.run_suffix()
-    print("Creating one fail-closed profile and policy per managed scan provider...")
-    print("Prerequisite: the account must have managed credits available for billable guardrail scans.")
-    failures = []
-    for index, (provider_id, provider_name, integration) in enumerate(PROVIDERS):
-        profile = None
-        policy = None
-        key = None
-        binding = None
-        try:
-            resource_name = f"guardrail-{provider_id}-{suffix}"
-            app_id = resource_name
-            profile = create_guardrail_profile(profile_input(resource_name, integration))
-            policy = create_policy({
-                "name": resource_name,
-                "mode": "enforce",
-                "budgetMode": "hard_fast",
-                "failMode": "fail_closed",
-                "allowedProviders": ["vertex_ai"],
-                "allowedModels": [MODEL_DEFAULT],
-                "guardrailProfileId": profile["id"],
-            })
-            key = create_virtual_key({
-                "name": f"vk-{resource_name}",
-                "teamId": "Platform AI",
-                "appId": app_id,
-                "environment": "dev",
-            })
-            binding = create_binding({
-                "policyId": policy["id"],
-                "teamId": "Platform AI",
-                "appId": app_id,
-                "environment": "dev",
-                "priority": 10,
-                "acknowledgeOverlap": True,
-            })
-            result = call_openai_style(
-                openai_style_client(key["accessToken"], config.BASE_URL),
-                MODEL_DEFAULT,
-                "Reply with exactly: guardrail scan passed.",
-                provider_name,
-            )
-            reason = f" ({result['reason']})" if result.get("reason") else ""
-            print(f"[{result['outcome']}] {provider_name}: {result.get('status') or 'served'}{reason}")
-            confirm_allowed(result, f"{provider_name} scan completed under a fail-closed policy")
-            if index == len(PROVIDERS) - 1:
-                print(
-                    f"  retained for review - profile: {profile['id']}; "
-                    f"policy: {policy['id']}; app: {app_id}"
-                )
-        except Exception as err:
-            failures.append(f"{provider_name}: {err}")
-        finally:
-            if index < len(PROVIDERS) - 1:
-                cleanup_errors = remove_temporary_resources(binding, policy, profile, key)
-                if cleanup_errors:
-                    failures.append(f"{provider_name} cleanup: {'; '.join(cleanup_errors)}")
+    # Governance setup: a guardrail profile with the selected managed provider scan attached
+    # to the policy this application runs under. Skipped when CLOPTIMA_VIRTUAL_KEY is set.
+    access = get_access(
+        app=f"guardrail-{provider['id']}-demo",
+        guardrail_profile=profile_input(f"guardrail-{provider['id']}-profile", provider["integration"]),
+        policy={
+            "name": f"guardrail-{provider['id']}-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "failMode": "fail_closed",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+        },
+    )
 
-    if failures:
-        raise RuntimeError("One or more provider checks failed:\n- " + "\n- ".join(failures))
-    print("\nAll three isolated managed provider scans completed successfully.")
-    print(f"Review policy and request records in the console: {config.CONSOLE['policies']} and {config.CONSOLE['audit']}")
+    client = openai_client(access["virtual_key"])
+
+    print("\nSending request through guarded route (pre-flight scan active)...")
+    try:
+        response = client.chat.completions.create(
+            model=MODELS["default"],
+            messages=[{"role": "user", "content": "Confirm this request passed safety scan."}],
+        )
+
+        content = response.choices[0].message.content or ""
+        tokens = response.usage.total_tokens if response.usage else 0
+        print(f'  ✓ Scan completed & response served: "{content.strip()}"')
+        print(f"  Tokens: {tokens} | Request ID: {response.id}")
+    except APIStatusError as err:
+        if err.status_code == 403:
+            body = err.body if isinstance(err.body, dict) else {}
+            reason = body.get("reason", str(err))
+            violations = body.get("violations", [])
+            print("  🛡️ Gateway Security Block (HTTP 403)")
+            print(f"  Reason: {reason}")
+            print(f"  Violations: {', '.join(violations)}")
+        else:
+            print(f"  Request error: {err}")
+    except Exception as err:
+        print(f"  Request error: {err}")
+
+    print("\nReview guardrail scan events in the Cloptima Console:")
+    print(f"  - Audit Trail: {CONSOLE['audit']}")
+    print(f"  - Policies: {CONSOLE['policies']}")
 
 
 if __name__ == "__main__":

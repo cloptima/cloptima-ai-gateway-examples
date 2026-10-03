@@ -12,6 +12,9 @@
 # The first turn has nothing to reuse yet - only later turns should show a
 # nonzero cached-token count as the shared history grows past the provider's
 # caching threshold.
+#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the policy and key). See .env.example.
 # Run standalone: ./conversation-prompt-caching.sh
 set -euo pipefail
 
@@ -22,8 +25,6 @@ load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 MAX_TOKENS_PER_CALL=80
-SUFFIX="$(run_suffix)"
-APP_ID="conv-cache-$SUFFIX"
 
 # A stable "project context" block a coding assistant would keep resending
 # as system context on every turn. Real enough in size to matter: providers
@@ -103,22 +104,19 @@ $(for i in $(seq 0 79); do
   printf -- "- \`app/services/module_%03d.py\` handles bounded-context concern #%d: validates inputs against the corresponding Pydantic schema, delegates persistence to its paired repository, publishes a domain event on state change, and never imports another service module directly - cross-context calls always go through the event bus.\n" "$i" "$i"
 done)"
 
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-echo "Creating a policy with no cache config at all (default off) - any cached-token evidence below comes from the provider's own prompt caching, not a Cloptima cache feature..."
-POLICY=$(create_policy "$(jq -n --arg name "conversation-prompt-caching-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model]}')")
-POLICY_ID=$(echo "$POLICY" | jq -r '.id')
-
-KEY=$(create_virtual_key "$(jq -n --arg name "vk-conv-cache-$SUFFIX" --arg appId "$APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted key $(echo "$KEY" | jq -r '.id'), bound."
+echo "=== Multi-Turn Assistant: Provider Prompt Caching ==="
 echo ""
 
-# 2. Your application code.
-echo "Sending a growing conversation - each turn resends the full history (system context + every prior exchange) plus one new short question, the same shape a coding assistant produces..."
+# Governance setup: a policy with no cache config at all (default off), so any cached-token
+# evidence below comes from the provider's own prompt caching, not a Cloptima cache feature.
+# Platform admins normally create it once in the Console, Terraform, or CI. Skipped when
+# CLOPTIMA_VIRTUAL_KEY points at a key whose policy already matches.
+get_access "coding-assistant-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
+  name: "coding-assistant-policy", mode: "enforce", budgetMode: "hard_fast",
+  allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
+
+# Application code: each turn resends the full message history plus one new short question.
+echo "Sending a growing conversation - each turn resends the full history (system context + every prior exchange) plus one new short question..."
 echo ""
 
 FOLLOW_UP_QUESTIONS=(
@@ -134,28 +132,51 @@ for i in "${!FOLLOW_UP_QUESTIONS[@]}"; do
   MESSAGES=$(echo "$MESSAGES" | jq --arg q "$QUESTION" '. + [{"role": "user", "content": $q}]')
   BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson maxTokens "$MAX_TOKENS_PER_CALL" --argjson messages "$MESSAGES" \
     '{model: $model, max_tokens: $maxTokens, messages: $messages}')
-  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
-    -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
+  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code}' -X POST "$BASE_URL/v1/ai/chat/completions" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: $USER_AGENT" \
     -H "x-cloptima-feature: conversation_prompt_caching_probe" \
     -d "$BODY")
-  # 3. What the gateway did.
-  confirm_equals "$HTTP_CODE" "200" "turn $((i + 1)) should be served"
-  if [ "$HTTP_CODE" -eq 200 ]; then
+  if [ "$HTTP_CODE" = "200" ]; then
     PROMPT_TOKENS=$(jq -r '.usage.prompt_tokens // "?"' "$RESP_BODY_FILE")
     CACHED_TOKENS=$(jq -r '.usage.prompt_tokens_details.cached_tokens // 0' "$RESP_BODY_FILE")
     REPLY=$(jq -r '.choices[0].message.content // ""' "$RESP_BODY_FILE")
     echo "  [turn-$((i + 1))] status=$HTTP_CODE prompt_tokens=$PROMPT_TOKENS cached_tokens=$CACHED_TOKENS"
     MESSAGES=$(echo "$MESSAGES" | jq --arg reply "$REPLY" '. + [{"role": "assistant", "content": $reply}]')
   else
-    echo "  [turn-$((i + 1))] status=$HTTP_CODE error"
+    echo "  [turn-$((i + 1))] failed (HTTP $HTTP_CODE)"
+    describe_block
+    break
   fi
 done
 
 echo ""
-echo "Confirmed: all ${#FOLLOW_UP_QUESTIONS[@]} turns served through standard chat endpoint."
 echo "Turn 1 has nothing to reuse yet, so cached_tokens should read 0 there. From turn 2"
 echo "onward, the repeated system context plus prior turns should start showing up as"
 echo "cached_tokens instead of full-price prompt tokens - propagation is not always"
 echo "immediate, so a slow start on turn 2 that catches up by turn 3-4 is expected, not a"
 echo "problem with this example."
-echo "Evidence: Explorer tab ($CONSOLE_SPEND) - filter by app \"$APP_ID\" - shows cached-token counts and the discounted per-request cost for each turn above."
+
+echo ""
+echo "--- Case 2: Anthropic Messages API (Explicit cache_control) ---"
+ANTHROPIC_BODY=$(jq -n --arg model "$MODEL_DEFAULT" --arg prompt "$PROJECT_CONTEXT" --arg q "${FOLLOW_UP_QUESTIONS[0]}" \
+  '{model: $model, max_tokens: 80, system: [{type: "text", text: $prompt, cache_control: {type: "ephemeral"}}], messages: [{role: "user", content: $q}]}')
+HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code}' -X POST "$BASE_URL/v1/messages" \
+  -H "x-api-key: $ACCESS_TOKEN" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: $USER_AGENT" \
+  -d "$ANTHROPIC_BODY")
+if [ "$HTTP_CODE" = "200" ]; then
+  INPUT_TOKENS=$(jq -r '.usage.input_tokens // "?"' "$RESP_BODY_FILE")
+  CREATED=$(jq -r '.usage.cache_creation_input_tokens // 0' "$RESP_BODY_FILE")
+  READ=$(jq -r '.usage.cache_read_input_tokens // 0' "$RESP_BODY_FILE")
+  echo "  [Anthropic Messages] status=$HTTP_CODE input_tokens=$INPUT_TOKENS (created: $CREATED, read: $READ)"
+else
+  echo "  [Anthropic Messages] request returned HTTP $HTTP_CODE"
+fi
+
+echo ""
+echo "Review prompt caching savings in Cloptima Console:"
+echo "  - Spend Explorer: $CONSOLE_SPEND"

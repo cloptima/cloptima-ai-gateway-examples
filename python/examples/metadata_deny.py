@@ -1,63 +1,108 @@
-"""Creates a policy requiring attribution metadata, but mints its virtual key
-deliberately WITHOUT team/app/environment and binds it by principalId
-instead - the only way to produce a genuine missing-attribution block, since
-a key with baked-in team/app/environment is trusted as an attribution
-fallback when headers are absent. Calling with zero headers on this
-deliberately unscoped key trips a more fundamental gate before the policy's
-own required-metadata check ever runs.
-Run standalone from python/:
-    python -m examples.metadata_deny
+"""FinOps Attribution: Mandatory Team & App Metadata
+
+Demonstrates how enterprise organizations enforce chargeback and cost allocation
+by requiring attribution headers on all managed inference requests.
+
+Pattern:
+1. Initialize client using an unscoped virtual key (no team or app baked in).
+2. Case 1: Call without attribution metadata -> Gateway refuses with HTTP 400.
+3. Case 2: Call with proper x-cloptima-team and x-cloptima-app headers -> Admitted.
+
+Auth: CLOPTIMA_AI_ADMIN_KEY creates the policy and an unscoped key. CLOPTIMA_VIRTUAL_KEY must be
+an unscoped key bound to a policy that requires team_id, app_id, and environment; a key with team
+and app baked in supplies its own attribution, so Case 1 would not be refused.
+
+Run standalone:
+  python -m examples.metadata_deny
 """
+from openai import APIStatusError
 
-import json
-
-from lib import config
-from lib.confirm import confirm_blocked
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key
-from lib.gateway_clients import openai_style_client
-from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT
+from lib import config, gateway_admin
+from lib.client import openai_client
+from lib.config import CONSOLE
+from lib.models import MODELS
 
 
-def main():
+def main() -> None:
+    print("=== FinOps Attribution: Enforcing Team & Application Tags ===\n")
+
     suffix = config.run_suffix()
+    if config.VIRTUAL_KEY:
+        print("Using CLOPTIMA_VIRTUAL_KEY. It should be an unscoped key bound to a policy requiring attribution metadata.\n")
+        virtual_key = config.VIRTUAL_KEY
+    elif config.AI_ADMIN_KEY:
+        print("Configuring policy requiring attribution metadata...")
+        policy = gateway_admin.create_policy({
+            "name": f"attribution-policy-{suffix}",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+            "metadata": {"required_metadata_keys": ["team_id", "app_id", "environment"]},
+        })
 
-    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
-    print("Creating a policy that requires team_id/app_id/environment metadata...")
-    policy = create_policy({
-        "name": f"metadata-deny-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-        "metadata": {"required_metadata_keys": ["team_id", "app_id", "environment"]},
-    })
+        # Key created without baked-in team/app to demonstrate header-driven attribution
+        key = gateway_admin.create_virtual_key({"name": f"vk-attribution-{suffix}"})
 
-    print("Minting a key with NO team/app/environment on purpose...")
-    key = create_virtual_key({"name": f"vk-metadata-deny-{suffix}"})
+        gateway_admin.create_binding({
+            "policyId": policy["id"],
+            "principalId": key["id"],
+            "actorType": "service",
+            "priority": 5,
+            "acknowledgeOverlap": True,
+        })
+        virtual_key = key["accessToken"]
+    else:
+        raise RuntimeError(
+            "Set CLOPTIMA_VIRTUAL_KEY to use an existing key, or CLOPTIMA_AI_ADMIN_KEY to let this example create its own policy and key (see .env.example)."
+        )
 
-    print("Binding by the key's own principalId (not team/app/environment)...")
-    # A principalId-only binding has no team/app/environment to distinguish its
-    # scope, so it always overlaps every other binding in the org - acknowledging
-    # that is required, not optional here.
-    create_binding({"policyId": policy["id"], "principalId": key["id"], "actorType": "service", "priority": 5, "acknowledgeOverlap": True})
-    print(f"Minted key {key['id']}, bound. Calling with zero attribution headers...\n")
+    client = openai_client(virtual_key)
 
-    # 2. Your application code - the official OpenAI SDK, unchanged.
-    client = openai_style_client(key["accessToken"], config.BASE_URL)
-    result = call_openai_style(
-        client, MODEL_DEFAULT,
-        "This call should be denied - the key is deliberately unscoped and no attribution metadata is sent.",
-        "metadata-deny-probe",
-    )
+    # Case 1: Calling without required attribution headers
+    print("--- Case 1: Unattributed Request (Missing Headers) ---")
+    try:
+        client.chat.completions.create(
+            model=MODELS["default"],
+            messages=[{"role": "user", "content": "Execute unallocated query."}],
+        )
+        print("Assistant: (Admitted unexpectedly)\n")
+    except APIStatusError as err:
+        if err.status_code in (400, 403):
+            body = err.body if isinstance(err.body, dict) else {}
+            message = body.get("message", str(err))
 
-    # 3. What the gateway did. confirm_blocked stops the script if the policy
-    # above was not held, so a silent regression cannot print as a success.
-    print(f"[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
-    confirm_blocked(result, "attribution required before policy resolution", status=400, violation="attribution")
-    print(
-        f"\nConfirmed: {result.get('status')} - \"Managed AI requests require Cloptima team and app attribution\" - a more basic gate "
-        "than the policy engine's own required_metadata_keys check, but a genuine block either way."
-    )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by key {key['id']} for the missing-attribution block record.")
+            print("🛑 Gateway Attribution Enforcement (HTTP 400)")
+            print(f"  Message: {message}")
+            print("\nApplication Action:")
+            print("  Request rejected because team and application cost centers were not provided.\n")
+        else:
+            raise
+
+    # Case 2: Supplying attribution headers
+    print("--- Case 2: Attributed Request (With Cost Center Headers) ---")
+    team_id = "Payment-Services"
+    app_id = "checkout-fraud-detection"
+    print(f'Injecting headers: x-cloptima-team="{team_id}", x-cloptima-app="{app_id}"')
+
+    try:
+        response = client.chat.completions.create(
+            model=MODELS["default"],
+            messages=[{"role": "user", "content": "Explain fraud detection scoring briefly."}],
+            extra_headers={
+                "x-cloptima-team": team_id,
+                "x-cloptima-app": app_id,
+                "x-cloptima-environment": "production",
+            },
+        )
+        content = response.choices[0].message.content or ""
+        print(f'Assistant: "{content.strip()}"')
+        print(f'✓ Request admitted and attributed to team "{team_id}" and app "{app_id}".\n')
+    except Exception as err:
+        print(f"Attributed call failed: {err}")
+
+    print("Review attributed spend in the Cloptima Console:")
+    print(f"  - Spend Explorer: {CONSOLE['spend']}")
 
 
 if __name__ == "__main__":

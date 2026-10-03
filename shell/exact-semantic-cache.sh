@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Creates a policy with exact cache enabled (enforce mode, full retention -
-# required to actually replay cached responses) and semantic cache enabled
-# (observe mode - enforce mode needs an additional per-app/content-class/
-# model-family approval on top of the policy flag). Repeats one exact prompt
-# for exact-cache evidence, then sends paraphrased variants for semantic-
-# cache evidence. There is no client-side cache toggle - this is entirely
-# policy-driven server-side; see ../docs/CACHE_AND_POLICY.md.
-# Note: because cache writes are processed in the background, a repeat fired
-# immediately after a write may transiently miss. The repeats below are
-# intentionally back-to-back to illustrate this propagation latency; do not
-# read an early miss as an error.
+# Knowledge-base Q&A under a caching policy. Exact cache (enforce, full retention - required to
+# replay cached responses) serves a repeated prompt without a model call. Semantic cache runs in
+# observe mode: paraphrased questions are evaluated for hits (enforce mode additionally needs a
+# per-app, per-route, per-model-family approval - see semantic-cache-enforce.sh).
+#
+# There is no client-side cache toggle: caching is entirely policy-driven (see
+# ../docs/CACHE_AND_POLICY.md). Cache writes are processed in the background, so a repeat sent
+# immediately after a write can transiently miss.
+#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the policy and key). See .env.example.
 # Run standalone: ./exact-semantic-cache.sh
 set -euo pipefail
 
@@ -19,52 +19,56 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
-SUFFIX="$(run_suffix)"
-APP_ID="cache-demo-$SUFFIX"
 
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-echo "Creating policy with exact cache (enforce, full retention) and semantic cache (observe)..."
-POLICY=$(create_policy "$(jq -n --arg name "exact-semantic-cache-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model],
-    promptRetentionMode: "full", exactCacheEnabled: true, exactCacheMode: "enforce",
-    semanticCacheEnabled: true, semanticCacheMode: "observe"}')")
-POLICY_ID=$(echo "$POLICY" | jq -r '.id')
-
-KEY=$(create_virtual_key "$(jq -n --arg name "vk-cache-demo-$SUFFIX" --arg appId "$APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted key $(echo "$KEY" | jq -r '.id'), bound."
+echo "=== Knowledge Base Q&A: Exact and Semantic Caching ==="
 echo ""
 
-# 2. Your application code.
-echo "Repeating one exact prompt 5x for exact-cache evidence..."
+# Governance setup: the policy this application runs under. Platform admins normally create it
+# once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
+# key whose policy already matches.
+get_access "knowledge-cache-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
+  name: "knowledge-cache-policy", mode: "enforce", budgetMode: "hard_fast",
+  allowedProviders: ["vertex_ai"], allowedModels: [$model],
+  promptRetentionMode: "full",
+  exactCacheEnabled: true, exactCacheMode: "enforce", exactCacheTtlSeconds: 3600,
+  semanticCacheEnabled: true, semanticCacheMode: "observe", semanticCacheSimilarityThreshold: 0.85}')"
+
+# Application code: ask a question and report latency.
+ask() {
+  local prompt="$1" label="$2" feature="$3"
+  read -r HTTP_CODE TIME_TOTAL < <(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code} %{time_total}\n' -X POST "$BASE_URL/v1/ai/chat/completions" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: $USER_AGENT" \
+    -H "x-cloptima-feature: $feature" \
+    -d "$(jq -n --arg model "$MODEL_DEFAULT" --arg prompt "$prompt" '{model: $model, messages: [{role: "user", content: $prompt}]}')")
+  if [ "$HTTP_CODE" = "200" ]; then
+    echo "  [$label] ${TIME_TOTAL}s | tokens: $(jq -r '.usage.total_tokens' "$RESP_BODY_FILE") | cached: $(jq -r '.usage.prompt_tokens_details.cached_tokens // 0' "$RESP_BODY_FILE")"
+  else
+    echo "  [$label] failed (HTTP $HTTP_CODE)"; describe_block
+  fi
+}
+
 EXACT_PROMPT="Summarize, in one sentence, why cloud costs increased for a customer running more Kubernetes pods this month."
+echo "Repeating one exact prompt 5 times (the first call is a miss; repeats can be served from the exact cache)..."
 for i in 1 2 3 4 5; do
-  call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "$EXACT_PROMPT" "exact-cache-$i" \
-    "x-cloptima-feature: exact_cache_probe"
-  confirm_allowed "exact-cache-$i served through the cache-enabled policy"
+  ask "$EXACT_PROMPT" "exact-$i" "exact_cache_probe"
 done
 
 echo ""
-echo "Sending 3 semantically similar (not identical) prompts for semantic-cache evidence..."
+echo "Sending 3 semantically similar (not identical) prompts..."
 SEMANTIC_PROMPTS=(
   "In one sentence, explain why a customer running more Kubernetes pods saw higher cloud costs this month."
   "Give a one-sentence explanation for increased cloud spend when a customer scales up their Kubernetes pod count."
   "Why did this customer's cloud bill go up after running additional Kubernetes pods this month? One sentence."
 )
 for i in "${!SEMANTIC_PROMPTS[@]}"; do
-  call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "${SEMANTIC_PROMPTS[$i]}" "semantic-cache-$((i + 1))" \
-    "x-cloptima-feature: semantic_cache_probe"
-  confirm_allowed "semantic-cache-$((i + 1)) served through the cache-enabled policy"
+  ask "${SEMANTIC_PROMPTS[$i]}" "semantic-$((i + 1))" "semantic_cache_probe"
 done
 
-# 3. What the gateway did. Caching is a cost optimisation, never a reason for
-# a call to fail - every repeat must still come back served.
 echo ""
-echo "Confirmed: all 8 calls served."
-echo ""
-echo "Cache hit/miss decisions show up in the console, not in this script's own output - compare latency and"
-echo "usage across the repeats above, then check the console for the authoritative hit/miss trail."
-echo "Evidence: Dashboard tab ($CONSOLE_DASHBOARD) shows realized cache savings; Explorer tab ($CONSOLE_SPEND) shows per-request cached-token counts for the repeats above; Audit tab ($CONSOLE_AUDIT) has the authoritative hit/miss trail."
+echo "Cache hit/miss decisions show up in the console, not in this script's output. Compare latency across the repeats above,"
+echo "then check the console for the authoritative trail:"
+echo "  - Dashboard (realized cache savings): $CONSOLE_DASHBOARD"
+echo "  - Explorer (per-request cached tokens): $CONSOLE_SPEND"
+echo "  - Audit (hit/miss trail): $CONSOLE_AUDIT"

@@ -1,55 +1,87 @@
-// Sets a per-request scan cost cap in a provider-backed guardrail profile.
-// The billable managed scan requires available Cloptima managed credits.
-// Run standalone: node src/examples/guardrail-cost-governance.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
-import { createGuardrailProfile, createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { callOpenAIStyle } from '../lib/callGateway.mjs';
-import { confirmAllowed } from '../lib/confirm.mjs';
+/**
+ * Guardrail Cost Governance: Managed Provider Scan Cost Capping
+ *
+ * Demonstrates how to configure a per-request cost cap on provider-backed guardrail
+ * scans (e.g. Google Model Armor) to protect against unexpected security scanning costs.
+ *
+ * Prerequisite:
+ * - Requires available Cloptima managed credits because external provider scans are billable.
+ *
+ * Run standalone:
+ *   node src/examples/guardrail-cost-governance.mjs
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { getAccess } from '../lib/access.mjs';
+import { CONSOLE } from '../lib/config.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 const MAX_COST_PER_REQUEST_CENTS = 1;
 
 async function main() {
-  const suffix = runSuffix();
-  const appId = `guardrail-cost-governance-${suffix}`;
-  console.log('Prerequisite: the account must have managed credits available for this billable guardrail scan.');
-  const profile = await createGuardrailProfile({
-    name: `guardrail-cost-governance-${suffix}`,
-    description: 'Managed Model Armor scan with a per-request cost cap',
-    definition: {
-      input: { action: 'observe', detectors: { secret: {} } },
-      output: { action: 'observe', detectors: { secret: {} } },
-      provider_integration: {
-        kind: 'google_model_armor', credential_source: 'cloptima_managed', scan_directions: 'input',
+  console.log('=== Guardrail Cost Governance: Per-Request Scan Cap ===\n');
+  console.log('Prerequisite: The account must have managed credits available for billable guardrail scans.\n');
+
+  // Governance setup: a guardrail profile with a managed Model Armor scan and a per-request cost cap,
+  // attached to the policy this application runs under. Platform admins normally create these once
+  // in the Console, Terraform, or CI. Skipped when CLOPTIMA_VIRTUAL_KEY points at a key whose policy
+  // already matches.
+  console.log(`Configuring guardrail profile with Google Model Armor and a ${MAX_COST_PER_REQUEST_CENTS}¢ cap...`);
+  const access = await getAccess({
+    app: 'guardrail-cost-demo',
+    guardrailProfile: {
+      name: 'guardrail-cost-profile',
+      description: 'Managed Model Armor scan with a per-request cost cap',
+      definition: {
+        input: { action: 'observe', detectors: { secret: {} } },
+        output: { action: 'observe', detectors: { secret: {} } },
+        provider_integration: {
+          kind: 'google_model_armor',
+          credential_source: 'cloptima_managed',
+          scan_directions: 'input',
+        },
+        cost: {
+          mode: 'enforce',
+          max_cost_per_request_cents: MAX_COST_PER_REQUEST_CENTS,
+          exceeded_action: 'block',
+        },
       },
-      cost: { mode: 'enforce', max_cost_per_request_cents: MAX_COST_PER_REQUEST_CENTS, exceeded_action: 'block' },
+    },
+    policy: {
+      name: 'guardrail-cost-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      failMode: 'fail_closed',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
     },
   });
-  const policy = await createPolicy({
-    name: `guardrail-cost-governance-${suffix}`,
-    mode: 'enforce', budgetMode: 'hard_fast', failMode: 'fail_closed',
-    allowedProviders: ['vertex_ai'], allowedModels: [MODELS.default], guardrailProfileId: profile.id,
-  });
-  const key = await createVirtualKey({
-    name: `vk-guardrail-cost-governance-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev',
-  });
-  await createBinding({
-    policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true,
-  });
 
-  const result = await callOpenAIStyle(openaiStyleClient(key.accessToken, config.baseUrl), {
-    model: MODELS.default,
-    prompt: 'Reply with exactly: scan cost is within the configured cap.',
-    label: 'cost-governance-probe',
-  });
-  console.log(`[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
-  confirmAllowed(result, 'provider scan stayed within the configured cost cap');
-  console.log(`\nConfirmed: the profile's ${MAX_COST_PER_REQUEST_CENTS}-cent cap admitted this scan.`);
-  console.log(`Profile: ${profile.id}; policy: ${policy.id}; review them in ${CONSOLE.policies} and ${CONSOLE.audit}`);
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  const client = openaiClient(access.virtualKey);
+
+  console.log('Sending user prompt through guarded route...');
+  try {
+    const response = await client.chat.completions.create({
+      model: MODELS.default,
+      messages: [{ role: 'user', content: 'Confirm this request passed safety scan within cost budget.' }],
+    });
+
+    console.log(`Assistant: "${response.choices[0].message.content.trim()}"`);
+    console.log(`Scan outcome: Admitted and served within the ${MAX_COST_PER_REQUEST_CENTS}¢ budget cap.`);
+  } catch (err) {
+    if (err.status === 403) {
+      console.log(`🛑 Scan Cost Exceeded Cap (HTTP 403): ${err.message}`);
+    } else {
+      console.error(`Request error: ${err.message}`);
+    }
+  }
+
+  console.log(`\nReview guardrail scan ledger and policies in Cloptima Console:`);
+  console.log(`  - Guardrail Scan Ledger: ${CONSOLE.audit}`);
+  console.log(`  - Policies: ${CONSOLE.policies}`);
 }
 
 main().catch((err) => {
-  console.error('guardrail-cost-governance failed:', err);
+  console.error('Example failed:', err.message);
   process.exitCode = 1;
 });

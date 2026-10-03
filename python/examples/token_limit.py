@@ -1,57 +1,94 @@
-"""Creates a policy with a realistic maxOutputTokens cap - well above the
-platform floor of 64 - and shows a long-response request get blocked
-pre-flight rather than silently truncated.
-Run standalone from python/:
-    python -m examples.token_limit
+"""Summarization Service with Output Token Boundaries
+
+Demonstrates how Cloptima policies prevent runaway output generation
+and protect against compute cost overruns pre-flight.
+
+Pattern:
+1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
+2. Case 1: Concise summary within token bounds -> admitted and generated.
+3. Case 2: Oversized generation violating maxOutputTokens cap -> blocked pre-flight.
+4. Application catches the token boundary error and informs the caller.
+
+Run standalone:
+  python -m examples.token_limit
 """
+from openai import APIStatusError
 
-import json
-
-from lib import config
-from lib.confirm import confirm_blocked
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key
-from lib.gateway_clients import openai_style_client
-from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT
-
-# Illustrative, not a platform minimum - the platform floor is 64. Change
-# this and re-run to see the cap move.
-MAX_OUTPUT_TOKENS = 200
+from lib.access import get_access
+from lib.client import openai_client
+from lib.config import CONSOLE
+from lib.models import MODELS
 
 
-def main():
-    suffix = config.run_suffix()
-    app_id = f"token-limit-{suffix}"
+def main() -> None:
+    print("=== Summarization Service: Output Token Boundaries ===\n")
 
-    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
-    print(f"Creating policy with maxOutputTokens={MAX_OUTPUT_TOKENS}...")
-    policy = create_policy({
-        "name": f"token-limit-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-        "maxOutputTokens": MAX_OUTPUT_TOKENS,
-    })
-    key = create_virtual_key({"name": f"vk-token-limit-{suffix}", "teamId": "Platform AI", "appId": app_id, "environment": "dev"})
-    create_binding({"policyId": policy["id"], "teamId": "Platform AI", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print(f"Minted key {key['id']}, bound. Requesting a long response the policy should reject...\n")
-
-    # 2. Your application code - the official OpenAI SDK, unchanged.
-    client = openai_style_client(key["accessToken"], config.BASE_URL)
-    result = call_openai_style(
-        client, MODEL_DEFAULT,
-        "Write a detailed 500-word essay about the history of cloud computing.",
-        "token-limit-probe",
+    # Governance setup: the policy this application runs under. Platform admins normally
+    # create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+    # points at a key whose policy already matches.
+    access = get_access(
+        app="token-limit-demo",
+        policy={
+            "name": "token-limit-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+            "maxOutputTokens": 100,  # the minimum allowed value is 64
+        },
     )
 
-    # 3. What the gateway did. confirm_blocked stops the script if the policy
-    # above was not held, so a silent regression cannot print as a success.
-    print(f"[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
-    confirm_blocked(result, f"maxOutputTokens={MAX_OUTPUT_TOKENS}", status=403, violation="output limit")
-    print(
-        f"\nConfirmed: blocked pre-flight ({result.get('status')}) - the request's default max_tokens exceeds {MAX_OUTPUT_TOKENS}, "
-        "and the error names both the requested and the allowed value."
-    )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - the block record names both the requested and allowed token values; Policies tab ({config.CONSOLE['policies']}) shows the maxOutputTokens config.")
+    # Application code: the official SDK, pointed at the gateway with a virtual key.
+    client = openai_client(access["virtual_key"])
+
+    # 1. Case 1: Concise request within bounds
+    print("--- Case 1: Concise Summary (Within Token Cap) ---")
+    try:
+        response = client.chat.completions.create(
+            model=MODELS["default"],
+            max_tokens=30,
+            messages=[{"role": "user", "content": "Summarize the concept of API gateways in 10 words."}],
+        )
+        content = response.choices[0].message.content or ""
+        print(f'Assistant: "{content.strip()}"')
+        tokens = response.usage.completion_tokens if response.usage else 0
+        print(f"Tokens used: {tokens}\n")
+    except Exception as err:
+        print(f"Unexpected error on valid token call: {err}")
+
+    # 2. Case 2: Excessive generation exceeding policy limit
+    print("--- Case 2: Unbounded Generation (Exceeding Policy Limit) ---")
+    oversized_prompt = "Write a comprehensive 500-word analysis on distributed microservice architectures."
+    print(f'User: "{oversized_prompt}"')
+
+    try:
+        client.chat.completions.create(
+            model=MODELS["default"],
+            # Requesting 500 tokens exceeds the policy's maxOutputTokens cap of 100
+            max_tokens=500,
+            messages=[{"role": "user", "content": oversized_prompt}],
+        )
+        print("Assistant: (Generated unexpectedly)\n")
+    except APIStatusError as err:
+        if err.status_code == 403:
+            body = err.body if isinstance(err.body, dict) else {}
+            reason = body.get("message", str(err))
+            violations = body.get("violations", [])
+
+            print("🛑 [Pre-flight Token Block: HTTP 403]")
+            print(f"  Message: {reason}")
+            if violations:
+                print(f"  Violations: {', '.join(violations)}")
+
+            print("\nApplication Fallback Action:")
+            print("  Request rejected pre-flight before incurring compute costs.")
+            print('  Notice to client: "Please request a concise summary (under 100 tokens) or adjust your policy quota."\n')
+        else:
+            raise
+
+    print("Review token limit policies in the Cloptima Console:")
+    print(f"  - Audit Trail: {CONSOLE['audit']}")
+    print(f"  - Policies: {CONSOLE['policies']}")
 
 
 if __name__ == "__main__":

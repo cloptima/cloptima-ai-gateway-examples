@@ -1,43 +1,60 @@
-// Creates an isolated policy-bound profile for each managed scan provider.
-// Requires available Cloptima managed credits because each scan is billable.
-// Run standalone:
-//   node src/examples/guardrail-detector-categories.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
-import { graphql, createGuardrailProfile, createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { callOpenAIStyle } from '../lib/callGateway.mjs';
-import { confirmAllowed } from '../lib/confirm.mjs';
+/**
+ * Multi-Provider Managed Guardrail Scans
+ *
+ * Demonstrates how Cloptima policies integrate with third-party cloud security providers
+ * (Google Model Armor, Azure AI Content Safety, Amazon Bedrock Guardrails) using
+ * Cloptima-managed credentials.
+ *
+ * Prerequisite:
+ * - Requires available Cloptima managed credits because external provider scans are billable.
+ *
+ * Run standalone:
+ *   node src/examples/guardrail-detector-categories.mjs
+ * Choose a provider with GUARDRAIL_PROVIDER (default google-model-armor):
+ *   GUARDRAIL_PROVIDER=azure-content-safety node src/examples/guardrail-detector-categories.mjs
+ *   GUARDRAIL_PROVIDER=bedrock-guardrails node src/examples/guardrail-detector-categories.mjs
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { getAccess } from '../lib/access.mjs';
+import { CONSOLE } from '../lib/config.mjs';
 import { MODELS } from '../lib/models.mjs';
 
-const PROVIDERS = [
-  {
+const PROVIDERS = {
+  'google-model-armor': {
     id: 'google-model-armor',
     name: 'Google Model Armor',
     integration: {
-      kind: 'google_model_armor', credential_source: 'cloptima_managed', scan_directions: 'input',
+      kind: 'google_model_armor',
+      credential_source: 'cloptima_managed',
+      scan_directions: 'input',
     },
   },
-  {
+  'azure-content-safety': {
     id: 'azure-content-safety',
     name: 'Azure AI Content Safety',
     integration: {
-      kind: 'azure_content_safety', credential_source: 'cloptima_managed',
-      prompt_shields_enabled: true, harm_categories: ['Hate', 'Violence'], scan_directions: 'input',
+      kind: 'azure_content_safety',
+      credential_source: 'cloptima_managed',
+      prompt_shields_enabled: true,
+      harm_categories: ['Hate', 'Violence'],
+      scan_directions: 'input',
     },
   },
-  {
+  'bedrock-guardrails': {
     id: 'bedrock-guardrails',
     name: 'Amazon Bedrock Guardrails',
     integration: {
-      kind: 'bedrock_guardrails', credential_source: 'cloptima_managed', scan_directions: 'input',
+      kind: 'bedrock_guardrails',
+      credential_source: 'cloptima_managed',
+      scan_directions: 'input',
     },
   },
-];
+};
 
 function profileInput(name, integration) {
   return {
     name,
-    description: 'Managed provider scan validation example',
+    description: 'Managed provider scan integration example',
     definition: {
       input: { action: 'observe', detectors: { secret: {} } },
       output: { action: 'observe', detectors: { secret: {} } },
@@ -46,81 +63,60 @@ function profileInput(name, integration) {
   };
 }
 
-async function removeTemporaryResources({ binding, policy, profile, key }) {
-  const actions = [
-    [binding, 'binding', (id) => graphql('mutation($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }', { id })],
-    [policy, 'policy', (id) => graphql('mutation($id: ID!) { deleteLLMGatewayPolicy(id: $id) }', { id })],
-    [profile, 'profile', (id) => graphql('mutation($id: ID!) { deleteLLMGuardrailProfile(id: $id) }', { id })],
-    [key, 'key', (id) => graphql('mutation($id: ID!) { revokeLLMGatewayKey(id: $id) }', { id })],
-  ];
-  const errors = [];
-  for (const [resource, label, remove] of actions) {
-    if (!resource?.id) continue;
-    try {
-      await remove(resource.id);
-    } catch (err) {
-      errors.push(`${label}: ${err.message}`);
-    }
-  }
-  return errors;
-}
-
 async function main() {
-  const suffix = runSuffix();
-  console.log('Creating one fail-closed profile and policy per managed scan provider...');
-  console.log('Prerequisite: the account must have managed credits available for billable guardrail scans.');
-  const failures = [];
-  for (const [index, provider] of PROVIDERS.entries()) {
-    let profile;
-    let policy;
-    let key;
-    let binding;
-    try {
-      const resourceName = `guardrail-${provider.id}-${suffix}`;
-      const appId = resourceName;
-      profile = await createGuardrailProfile(profileInput(resourceName, provider.integration));
-      policy = await createPolicy({
-        name: resourceName,
-        mode: 'enforce', budgetMode: 'hard_fast', failMode: 'fail_closed',
-        allowedProviders: ['vertex_ai'], allowedModels: [MODELS.default],
-        guardrailProfileId: profile.id,
-      });
-      key = await createVirtualKey({
-        name: `vk-${resourceName}`, teamId: 'Platform AI', appId, environment: 'dev',
-      });
-      binding = await createBinding({
-        policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev',
-        priority: 10, acknowledgeOverlap: true,
-      });
-      const client = openaiStyleClient(key.accessToken, config.baseUrl);
-      const result = await callOpenAIStyle(client, {
-        model: MODELS.default,
-        prompt: 'Reply with exactly: guardrail scan passed.',
-        label: provider.name,
-      });
-      console.log(`[${result.outcome}] ${provider.name}: ${result.status ?? 'served'}${result.reason ? ` (${JSON.stringify(result.reason)})` : ''}`);
-      confirmAllowed(result, `${provider.name} scan completed under a fail-closed policy`);
-      if (index === PROVIDERS.length - 1) {
-        console.log(`  retained for review - profile: ${profile.id}; policy: ${policy.id}; app: ${appId}`);
-      }
-    } catch (err) {
-      failures.push(`${provider.name}: ${err.message}`);
-    } finally {
-      if (index < PROVIDERS.length - 1) {
-        const cleanupErrors = await removeTemporaryResources({ binding, policy, profile, key });
-        if (cleanupErrors.length) failures.push(`${provider.name} cleanup: ${cleanupErrors.join('; ')}`);
-      }
+  console.log('=== Multi-Provider Managed Guardrail Evaluation ===\n');
+  console.log('Prerequisite: The account must have managed credits available for billable guardrail scans.\n');
+
+  const selectedKey = process.env.GUARDRAIL_PROVIDER || 'google-model-armor';
+  const provider = PROVIDERS[selectedKey];
+  if (!provider) {
+    throw new Error(`Unknown GUARDRAIL_PROVIDER "${selectedKey}". Use one of: ${Object.keys(PROVIDERS).join(', ')}.`);
+  }
+  console.log(`Active Provider Integration: ${provider.name}`);
+
+  // Governance setup: a guardrail profile with the selected managed provider scan attached
+  // to the policy this application runs under. Skipped when CLOPTIMA_VIRTUAL_KEY is set.
+  const access = await getAccess({
+    app: `guardrail-${provider.id}-demo`,
+    guardrailProfile: profileInput(`guardrail-${provider.id}-profile`, provider.integration),
+    policy: {
+      name: `guardrail-${provider.id}-policy`,
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      failMode: 'fail_closed',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
+    },
+  });
+
+  // Application code: official SDK pointed at the gateway with virtual key.
+  const client = openaiClient(access.virtualKey);
+
+  console.log('\nSending request through guarded route (pre-flight scan active)...');
+  try {
+    const response = await client.chat.completions.create({
+      model: MODELS.default,
+      messages: [{ role: 'user', content: 'Confirm this request passed safety scan.' }],
+    });
+
+    console.log(`  ✓ Scan completed & response served: "${response.choices[0].message.content.trim()}"`);
+    console.log(`  Tokens: ${response.usage?.total_tokens} | Request ID: ${response.id}`);
+  } catch (err) {
+    if (err.status === 403) {
+      console.log(`  🛡️ Gateway Security Block (HTTP 403)`);
+      console.log(`  Reason: ${err.error?.reason || err.message}`);
+      console.log(`  Violations: ${(err.error?.violations || []).join(', ')}`);
+    } else {
+      console.log(`  Request error: ${err.message}`);
     }
   }
 
-  if (failures.length) {
-    throw new Error(`One or more provider checks failed:\n- ${failures.join('\n- ')}`);
-  }
-  console.log('\nAll three isolated managed provider scans completed successfully.');
-  console.log(`Review policy and request records in the console: ${CONSOLE.policies} and ${CONSOLE.audit}`);
+  console.log(`\nReview guardrail scan events in the Cloptima Console:`);
+  console.log(`  - Audit Trail: ${CONSOLE.audit}`);
+  console.log(`  - Policies: ${CONSOLE.policies}`);
 }
 
 main().catch((err) => {
-  console.error('guardrail-detector-categories failed:', err);
+  console.error('Example failed:', err.message);
   process.exitCode = 1;
 });

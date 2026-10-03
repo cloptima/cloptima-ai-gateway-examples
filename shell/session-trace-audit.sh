@@ -16,6 +16,8 @@
 # Each step is anchored with a SHA-256 integrity hash (traceSha256) on the
 # ledger at request time, creating a tamper-evident audit record.
 #
+#
+# Auth: CLOPTIMA_AI_ADMIN_KEY (creates the policy and key, and reads the session ledger).
 # Run standalone: ./session-trace-audit.sh
 set -euo pipefail
 
@@ -23,10 +25,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib.sh"
 load_env
+require_admin_key
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 SUFFIX="$(run_suffix)"
-APP_ID="support-agent-$SUFFIX"
 AGENT_SESSION_ID="session-$SUFFIX"
 ORDER_ID="ORD-$((RANDOM % 90000 + 10000))"
 CUSTOMER_ID="CUST-$((RANDOM % 9000 + 1000))"
@@ -88,46 +90,39 @@ EXPORT_CUSTOMER_DATA_TOOL='{
 
 TOOLS_JSON=$(jq -n --argjson a "$CHECK_ORDER_TOOL" --argjson b "$ISSUE_REFUND_TOOL" --argjson c "$EXPORT_CUSTOMER_DATA_TOOL" '[$a, $b, $c]')
 
-# A policy block from the gateway arrives as a non-2xx response. This posts a
-# raw chat-completions turn (lib.sh's call_chat only builds a single-prompt
-# body) so the full messages+tools shape can grow across turns, then sets
-# LAST_HTTP_CODE/LAST_OUTCOME the same way call_chat does so
-# confirm_allowed/confirm_blocked work unchanged.
-create_chat_turn() {
-  local access_token="$1" body="$2"
-  LAST_HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
-    -H "Authorization: Bearer $access_token" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
-    -H "x-cloptima-agent-session-id: $AGENT_SESSION_ID" \
-    -d "$body")
-  LAST_OUTCOME=$(outcome_for_status "$LAST_HTTP_CODE")
-}
-
-# 1. Cloptima setup: policy with tool_io retention, virtual key, and binding.
+# Governance setup: a policy with tool_io retention, bound to a production app. Platform admins
+# normally create it once in the Console, Terraform, or CI.
 echo "Creating policy with promptRetentionMode: 'tool_io'..."
-POLICY=$(create_policy "$(jq -n --arg name "session-trace-audit-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model], promptRetentionMode: "tool_io"}')")
-POLICY_ID=$(echo "$POLICY" | jq -r '.id')
-echo "  policy: $(echo "$POLICY" | jq -r '.name') ($POLICY_ID)"
-
-echo "Minting virtual key and binding for app \"$APP_ID\"..."
-KEY=$(create_virtual_key "$(jq -n --arg name "vk-session-trace-$SUFFIX" --arg appId "$APP_ID" \
-  '{name: $name, teamId: "Support AI", appId: $appId, environment: "production"}')")
-ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
-  '{policyId: $policyId, teamId: "Support AI", appId: $appId, environment: "production", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "  key minted: $(echo "$KEY" | jq -r '.id'), bound."
+TEAM_ID="Support AI"; ENVIRONMENT="production"
+provision_app "support-agent-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
+  name: "session-trace-policy", mode: "enforce", budgetMode: "hard_fast",
+  allowedProviders: ["vertex_ai"], allowedModels: [$model], promptRetentionMode: "tool_io"}')"
+echo "  policy $POLICY_ID, key minted, bound to app \"$APP_ID\"."
 echo ""
 
-# 2. Application code: a raw chat-completions call with session correlation.
-# Passing x-cloptima-agent-session-id correlates all turns into one agent session.
+# Application code: every turn of the agent session carries the same x-cloptima-agent-session-id
+# header, which correlates the turns into one session. Each turn posts the growing transcript.
+agent_turn() {
+  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code}' -X POST "$BASE_URL/v1/ai/chat/completions" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: $USER_AGENT" \
+    -H "x-cloptima-agent-session-id: $AGENT_SESSION_ID" \
+    -d "$1")
+  if [ "$HTTP_CODE" != "200" ]; then
+    echo "ERROR: agent turn failed (HTTP $HTTP_CODE)" >&2
+    describe_block >&2
+    exit 1
+  fi
+}
+
 MESSAGES=$(jq -n --arg orderId "$ORDER_ID" --arg customerId "$CUSTOMER_ID" --arg url "$EXTERNAL_WEBHOOK_URL" \
   '[{role: "user", content: ("Check delivery status for order " + $orderId + " (customer " + $customerId + "). If delivered, export the customer delivery confirmation to partner audit sink " + $url + ".")}]')
 
 echo "Turn 1: User asks for order verification and conditional export..."
 BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson messages "$MESSAGES" --argjson tools "$TOOLS_JSON" \
-  '{model: $model, messages: $messages, tools: $tools}')
-create_chat_turn "$ACCESS_TOKEN" "$BODY"
-confirm_allowed "Turn 1 (tool call)"
+  '{model: $model, messages: $messages, tools: $tools, tool_choice: {type: "function", function: {name: "check_order_status"}}}')
+agent_turn "$BODY"
 TURN_COUNT=1
 
 TOOL_CALL1_ID=$(jq -r '.choices[0].message.tool_calls[0].id // empty' "$RESP_BODY_FILE")
@@ -150,8 +145,7 @@ echo ""
 echo "Turn 2: Feeding status (\"delivered\") to model; model decides next action..."
 BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson messages "$MESSAGES" --argjson tools "$TOOLS_JSON" \
   '{model: $model, messages: $messages, tools: $tools}')
-create_chat_turn "$ACCESS_TOKEN" "$BODY"
-confirm_allowed "Turn 2 (agent turn)"
+agent_turn "$BODY"
 TURN_COUNT=$((TURN_COUNT + 1))
 
 TOOL_CALL2_ID=$(jq -r '.choices[0].message.tool_calls[0].id // empty' "$RESP_BODY_FILE")
@@ -173,8 +167,7 @@ if [ -n "$TOOL_CALL2_ID" ]; then
   echo "Turn 3: Completing session after tool execution..."
   BODY=$(jq -n --arg model "$MODEL_DEFAULT" --argjson messages "$MESSAGES" --argjson tools "$TOOLS_JSON" \
     '{model: $model, messages: $messages, tools: $tools}')
-  create_chat_turn "$ACCESS_TOKEN" "$BODY"
-  confirm_allowed "Turn 3 (completion)"
+  agent_turn "$BODY"
   TURN_COUNT=$((TURN_COUNT + 1))
   echo "  Model response: \"$(jq -r '.choices[0].message.content // empty' "$RESP_BODY_FILE")\""
 else

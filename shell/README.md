@@ -1,86 +1,117 @@
-# Cloptima AI gateway examples (shell / curl)
+# Cloptima AI Gateway Examples (shell / curl)
 
-Each script here is independent and self-contained: `curl` + `jq` only, no other dependency. It creates its own policy, virtual key, and binding, runs its scenario, and prints what happened. Run any single one in isolation; none of them depend on another having run first. `lib.sh` holds the small set of shared helpers (`graphql`, `create_policy`, `create_virtual_key`, `create_binding`, `create_llm_gateway_approval`, `list_llm_gateway_approvals`, `call_chat`, `call_messages`) every script sources.
+Examples of how to call the Cloptima AI Gateway with plain `curl` and `jq`, and how your scripts and services behave when a governance control applies. No SDK and no package install.
 
-## Requirements
+## Integrating in two lines
 
-- `curl`
-- `jq`
-- `uuidgen` (falls back to `python3 -c 'import uuid...'` if not present)
+To send traffic through Cloptima, use a Cloptima virtual key as the credential and the gateway as the URL. The request body is the standard OpenAI or Anthropic shape.
 
-## Setup
+### OpenAI-compatible
 
 ```bash
-cp .env.example .env   # fill in CLOPTIMA_AI_ADMIN_KEY
+curl -sS https://api.cloptima.ai/v1/ai/chat/completions \
+  -H "Authorization: Bearer $CLOPTIMA_VIRTUAL_KEY" \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: my-app/1.0" \
+  -d '{
+    "model": "vertex_ai/gemini-3.5-flash-lite",
+    "messages": [{"role": "user", "content": "Hello Cloptima!"}]
+  }'
 ```
 
-Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for a suggested 7-script run order.
+### Anthropic-compatible
+
+```bash
+curl -sS https://api.cloptima.ai/v1/messages \
+  -H "x-api-key: $CLOPTIMA_VIRTUAL_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: my-app/1.0" \
+  -d '{
+    "model": "vertex_ai/gemini-3.5-flash-lite",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello Cloptima!"}]
+  }'
+```
+
+Always send a `User-Agent` header. The gateway sits behind a bot-managed edge that can block requests with none or a generic one.
+
+## How each example is organized
+
+Every script has two parts:
+
+1. **Governance setup.** The policy (and any guardrail profile, tool server, or price sheet) the scenario runs under, written inline with its real configuration. Platform teams normally create these once in the Console, Terraform, or CI.
+2. **Application code.** What your service does: `curl` calls, handling blocks, and reading results. This is the part to copy into your own scripts.
+
+`lib.sh` holds the small set of helpers the setup uses (`get_access`, `provision_app`, `graphql`, and the `create_*` mutations) and `describe_block`, which prints the message, reason, and violations from a blocked response.
+
+## Run an example
+
+Requires `curl` and `jq`.
+
+```bash
+cp .env.example .env
+./quickstart-openai.sh
+```
+
+Set one credential in `.env`:
+
+- `CLOPTIMA_AI_ADMIN_KEY`: the script runs its governance setup for you, then runs the application code. Works with every example.
+- `CLOPTIMA_VIRTUAL_KEY`: the script skips setup and runs only the application code with your key. Use it with the examples marked **Virtual key** below. The key must be bound to a policy like the one in the script's governance setup, or the scenario will not trigger.
+
+Some examples need more: `byok` and `contract-pricing` need `PROVIDER_API_KEY` (or `CLOPTIMA_PROVIDER_CREDENTIAL_ID`), and the managed guardrail examples need available managed credits.
+
+## Handling gateway responses
+
+When a control applies, the gateway returns a non-2xx status and a JSON body:
+
+```json
+{ "error": "<message>", "reason": "<reason code>", "violations": ["<violation>"] }
+```
+
+Check the status with `curl -w '%{http_code}'` and read the body with `jq`.
+
+| Status | Typical cause | What your application does |
+| --- | --- | --- |
+| **402** | Budget limit exhausted. | Stop non-critical requests or alert FinOps. |
+| **403** | A guardrail, provider or model allowlist, tool allowlist, or loop cap blocked the request. `violations` lists the reasons. | Show a safe message to the user, fall back to an approved model, or stop the agent. |
+| **429** | Request rate limit exceeded. | Back off and retry with exponential backoff. |
+| **400** | Required attribution (team, app) is missing, or a request parameter is invalid. | Add the attribution headers or correct the request. |
 
 ## Examples
 
-| Script | What it shows |
-| --- | --- |
-| `./quickstart-openai.sh` | Simplest working call, OpenAI-compatible shape. |
-| `./quickstart-anthropic.sh` | Same, Anthropic-compatible shape. |
-| `./multi-model.sh` | One policy allowlisting several Vertex AI Gemini model variants, called through it to compare cost and latency. |
-| `./rate-limit.sh` | A realistic per-minute request cap tripping after several calls. |
-| `./token-limit.sh` | A realistic output-token cap blocking a too-long request pre-flight. |
-| `./budget-limit.sh` | A small daily spend cap admitting several calls, then denying the rest. |
-| `./agentic-runaway.sh` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
-| `./pii-guardrail.sh` | A profile custom rule blocks a fictional SSN format before model egress. |
-| `./exact-semantic-cache.sh` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
-| `./conversation-prompt-caching.sh` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
-| `./provider-deny.sh` | A non-Vertex model request blocked by a Vertex-only policy. |
-| `./metadata-deny.sh` | A deliberately unscoped key with no attribution headers, blocked. |
-| `./byok.sh` | Bring your own provider credential and route it through Cloptima's governance layer (needs `PROVIDER_API_KEY` in `.env`). |
-| `./unit-economics-roi.sh` | A cost-center agent (ROI vs. a pre-LLM baseline) and a profit-center agent (real booked revenue) side by side, each with its own computed report. |
-| `./contract-pricing.sh` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
-| `./semantic-cache-enforce.sh` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
-| `./approval-workflow.sh` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
-| `./guardrail-detector-categories.sh` | Creates isolated policy-bound profiles and exercises Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails (requires available managed credits). |
-| `./guardrail-cost-governance.sh` | Sets a per-request scan cost cap in a provider-backed guardrail profile (requires available managed credits). |
-| `./adaptive-routing.sh` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
-| `./prompt-release-workflow.sh` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
-| `./mcp-tool-governance.sh` | MCP server registration, approval rules, tool-definition review, and blocked server/tool checks. |
-| `./session-trace-audit.sh` | Tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification. |
-| `./cleanup.sh` | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, datasets, and ROI calibrations; archive prompt templates and price sheets; revoke keys and credentials; reject pending approvals. |
+| Script | Auth | Scenario |
+| --- | --- | --- |
+| `./quickstart-openai.sh` | Virtual key | Chat completion and streaming in the OpenAI-compatible shape. |
+| `./quickstart-anthropic.sh` | Virtual key | Messages and streaming in the Anthropic-compatible shape. |
+| `./multi-model.sh` | Virtual key | Compare latency and token cost across models under one policy. |
+| `./pii-guardrail.sh` | Virtual key | Support bot blocks an SSN before it reaches the model and returns a friendly fallback. |
+| `./provider-deny.sh` | Virtual key | Compliance policy blocks a non-approved provider; the app falls back to an approved model. |
+| `./rate-limit.sh` | Virtual key | Batch worker retries with exponential backoff on HTTP 429. |
+| `./token-limit.sh` | Virtual key | Summarization service handles an output-token cap. |
+| `./budget-limit.sh` | Virtual key | Job stops non-critical work when the daily budget is reached. |
+| `./agentic-runaway.sh` | Virtual key | Agent loop and repeated tool retries are stopped by the policy's loop and retry caps. |
+| `./exact-semantic-cache.sh` | Virtual key | Latency and token savings from exact and semantic cache hits. |
+| `./conversation-prompt-caching.sh` | Virtual key | Provider prompt caching on a growing multi-turn conversation (OpenAI and Anthropic). |
+| `./adaptive-routing.sh` | Virtual key | Adaptive routing in observe mode across cheap, balanced, and strong model tiers. |
+| `./guardrail-cost-governance.sh` | Virtual key | Per-request cost cap on a managed guardrail scan. |
+| `./metadata-deny.sh` | Virtual key | Requests without team and app attribution are refused; attributed requests are admitted. With `CLOPTIMA_VIRTUAL_KEY`, use an unscoped key (no team or app baked in) bound to a policy that requires attribution. |
+| `./guardrail-detector-categories.sh` | Virtual key | One managed guardrail scan per run: Google Model Armor (default), Azure AI Content Safety, or Amazon Bedrock Guardrails. Choose with `GUARDRAIL_PROVIDER=google-model-armor\|azure-content-safety\|bedrock-guardrails`. |
+| `./byok.sh` | Virtual key + `CLOPTIMA_PROVIDER_CREDENTIAL_ID`, or admin key + `PROVIDER_API_KEY` | Route calls through your own provider credential. |
+| `./semantic-cache-enforce.sh` | Admin key | Enforce-mode semantic cache, including the class approval it needs. |
+| `./unit-economics-roi.sh` | Admin key | Cost-center and profit-center ROI from business-outcome headers and unit metrics. |
+| `./contract-pricing.sh` | Admin key + `PROVIDER_API_KEY` or `CLOPTIMA_PROVIDER_CREDENTIAL_ID` | Negotiated rate sheet versus retail cost on your own credentials. |
+| `./approval-workflow.sh` | Admin key | Budget-change request waits in the governance queue; a pre-authorized change applies immediately. |
+| `./prompt-release-workflow.sh` | Admin key | Prompt evaluation against a golden dataset and a quality-gated release. |
+| `./mcp-tool-governance.sh` | Admin key | Tool servers start disabled until reviewed; unregistered servers and disallowed tools are blocked. |
+| `./session-trace-audit.sh` | Admin key | Agent session with tool I/O capture and per-step integrity hashes (`traceSha256`). |
+| `./cleanup.sh` | Admin key | Delete the policies, keys, profiles, and datasets the examples created. |
 
-Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - edit the constants near the top of any script and re-run it.
+## Cleanup
 
-## Resetting Resources & Account Quotas
-
-Each example script provisions its own policy, virtual key, and binding on the fly. Running multiple scripts will consume quotas on your account (such as maximum policies or active keys). If you hit account limit errors during an evaluation tour, or want to clean up afterward, run:
+Each run creates a policy, a virtual key, and a binding. To remove what the examples created:
 
 ```bash
-./cleanup.sh
+./cleanup.sh          # asks for confirmation
+./cleanup.sh --force  # no prompt
 ```
-
-In automated or CI environments, pass `--force` to bypass the interactive confirmation:
-
-```bash
-./cleanup.sh --force
-```
-
-> [!WARNING]
-> **Account-Wide Cleanup**: This script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, eval datasets, and ROI calibrations; archives **all** prompt templates and price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the current account. Run only in sandbox or test accounts, never against production environments.
-
-`rate-limit.sh` in particular is timing-sensitive: limits are evaluated per fixed calendar minute (e.g., 10:00:00 to 10:00:59 UTC) rather than a rolling window. Because `curl` subprocess overhead takes time, a run can cross a minute boundary and receive a fresh quota partway through. If it doesn't trip, simply re-run it.
-
-## How the gateway calls work
-
-- The gateway URL is already built into `lib.sh` - you don't need to know or set it.
-- OpenAI-style: `POST <gateway>/v1/ai/chat/completions` with `Authorization: Bearer <virtual key>`.
-- Anthropic-style: `POST <gateway>/v1/messages` with `x-api-key: <virtual key>` and `anthropic-version: 2023-06-01`.
-- Supported managed-gateway attribution rides as `x-cloptima-*` headers; telemetry-only dimensions are listed separately in `../docs/ENVIRONMENT.md`.
-- There is no client-side cache toggle - caching is entirely policy-driven server-side (see `../docs/CACHE_AND_POLICY.md`).
-- Policy/key/binding creation goes through the public `createLLMGatewayPolicy` / `createLLMGatewayKey` / `createLLMGatewayPolicyBinding` GraphQL mutations - see `lib.sh`.
-
-## How each script is laid out
-
-Every example follows the same three steps, so you can read any of them top to bottom:
-
-1. **Cloptima setup** - create the policy, virtual key, and binding. Together these are the entire contract; nothing later asks the gateway to enforce anything.
-2. **Your application code** - standard `curl` calls against `/v1/ai/chat/completions` or `/v1/messages`.
-3. **What the gateway did** - print the outcome, then confirm it against what the policy in step 1 configured (`lib.sh` helpers).
-
-That last step is a real check, not narration: if a limit, guardrail, or scope did not hold, the script exits non-zero with a message naming the control that failed, so a run can never report a governance guarantee it did not get.

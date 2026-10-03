@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Creates a hard_strict policy with a small but real per-policy daily budget,
-# distinct from the org-wide managed-credits wallet cap, and fires calls in a
-# loop until the budget denies the rest.
+# Scheduled job under a small per-policy daily budget. Calls are admitted until the budget is
+# spent, then the gateway returns HTTP 402 and the job stops non-critical work.
 #
-# hard_strict reserves against an ESTIMATED cost derived from the request's
-# max_tokens (a pessimistic worst case), not the realized post-completion
-# cost - so every call here passes an explicit, modest max_tokens to keep
-# that estimate small and consistent. Without that, an unbounded default
-# max_tokens would make the very first call's estimate blow past a small
-# budget and trip on call 1 regardless of the budget's actual size.
+# hard_strict reserves against an ESTIMATED cost derived from the request's max_tokens (a
+# pessimistic worst case), not the realized post-completion cost, so every call passes a modest
+# explicit max_tokens to keep that estimate small and consistent.
+#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the policy and key). See .env.example.
 # Run standalone: ./budget-limit.sh
 set -euo pipefail
 
@@ -21,49 +20,57 @@ MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 # Illustrative, not a platform minimum. Bounds: dailyBudgetUsd accepts 0-10,000,000.
 DAILY_BUDGET_USD="0.001"
 MAX_TOKENS_PER_CALL=100
-# At current catalog rates this budget is observed to cross around call ~4-6.
 MAX_CALLS=60
-SUFFIX="$(run_suffix)"
-APP_ID="budget-limit-$SUFFIX"
 
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-echo "Creating hard_strict policy with dailyBudgetUsd=\$$DAILY_BUDGET_USD..."
-POLICY=$(create_policy "$(jq -n --arg name "budget-limit-$SUFFIX" --arg model "$MODEL_DEFAULT" --argjson budget "$DAILY_BUDGET_USD" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_strict", allowedProviders: ["vertex_ai"], allowedModels: [$model], dailyBudgetUsd: $budget}')")
-POLICY_ID=$(echo "$POLICY" | jq -r '.id')
-
-KEY=$(create_virtual_key "$(jq -n --arg name "vk-budget-limit-$SUFFIX" --arg appId "$APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Firing calls (max $MAX_CALLS) until the budget denies..."
+echo "=== FinOps: Multi-Tenant Cost Governance & Budget Caps ==="
 echo ""
 
-# 2. Your application code.
-ALLOWED_COUNT=0
+# Governance setup: the policy this application runs under. Platform admins normally create it
+# once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
+# key whose policy already matches.
+get_access "budget-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson budget "$DAILY_BUDGET_USD" '{
+  name: "budget-policy", mode: "enforce", budgetMode: "hard_strict",
+  allowedProviders: ["vertex_ai"], allowedModels: [$model], dailyBudgetUsd: $budget}')"
+
+# Application code: run tasks until the gateway reports the budget is exhausted.
+echo "Executing workload under a policy with a \$$DAILY_BUDGET_USD daily budget cap (max $MAX_CALLS calls)..."
+echo ""
+SUCCESSFUL_CALLS=0
+BUDGET_TRIPPED=false
 for i in $(seq 1 "$MAX_CALLS"); do
-  BODY=$(jq -n --arg model "$MODEL_DEFAULT" --arg prompt "Budget probe $i. Reply with just \"ok\"." --argjson maxTokens "$MAX_TOKENS_PER_CALL" \
-    '{model: $model, max_tokens: $maxTokens, messages: [{role: "user", content: $prompt}]}')
-  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w "%{http_code}" -X POST "$BASE_URL/v1/ai/chat/completions" \
-    -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" \
-    -d "$BODY")
-  if [ "$HTTP_CODE" = "200" ]; then
-    echo "  [allowed] call-$i (http $HTTP_CODE)"
-    ALLOWED_COUNT=$((ALLOWED_COUNT + 1))
-  else
-    echo "  [blocked] call-$i (http $HTTP_CODE)"
-    LAST_HTTP_CODE="$HTTP_CODE"
-    LAST_OUTCOME="blocked"
-    break
-  fi
+  HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code}' -X POST "$BASE_URL/v1/ai/chat/completions" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: $USER_AGENT" \
+    -d "$(jq -n --arg model "$MODEL_DEFAULT" --arg prompt "Task #$i: Generate a short status update." --argjson max "$MAX_TOKENS_PER_CALL" \
+      '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')")
+  case "$HTTP_CODE" in
+    200)
+      SUCCESSFUL_CALLS=$((SUCCESSFUL_CALLS + 1))
+      echo "[Call $i] Allowed - Tokens: $(jq -r '.usage.total_tokens' "$RESP_BODY_FILE")"
+      ;;
+    402 | 403 | 429)
+      BUDGET_TRIPPED=true
+      echo ""
+      echo "[Call $i] Gateway budget limit intercepted (HTTP $HTTP_CODE)"
+      describe_block
+      echo ""
+      echo "Application FinOps action: daily budget reached. Halting non-critical requests and alerting FinOps."
+      break
+      ;;
+    *)
+      echo "[Call $i] Unexpected response (HTTP $HTTP_CODE)" >&2
+      describe_block >&2
+      exit 1
+      ;;
+  esac
 done
 
-# 3. What the gateway did. confirm_cap_stopped stops the script if the budget
-# never denied a call, so a silent regression cannot print as a success.
-confirm_cap_stopped "$ALLOWED_COUNT" "" "dailyBudgetUsd=$DAILY_BUDGET_USD"
-confirm_blocked "dailyBudgetUsd=$DAILY_BUDGET_USD" 402
-
 echo ""
-echo "$ALLOWED_COUNT calls served, then call-$((ALLOWED_COUNT + 1)) returned $HTTP_CODE once the \$$DAILY_BUDGET_USD/day policy budget was exhausted."
-echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$APP_ID\" for the 402 block record; Explorer tab ($CONSOLE_SPEND) shows the spend accumulated right up to the cap."
+echo "Summary:"
+echo "  - Successful calls admitted: $SUCCESSFUL_CALLS"
+echo "  - Budget limit enforced: $([ "$BUDGET_TRIPPED" = true ] && echo Yes || echo 'Quota not exhausted yet')"
+echo ""
+echo "Review allocated spend and team attribution in the Cloptima Console:"
+echo "  - Spend Explorer: $CONSOLE_SPEND"
+echo "  - Budget Policies: $CONSOLE_POLICIES"

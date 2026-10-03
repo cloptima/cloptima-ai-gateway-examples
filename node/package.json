@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Self-contained Node examples for Cloptima's managed AI gateway: each script creates its own policy and virtual key, then exercises it.",
+  "description": "Node examples showing how to integrate with Cloptima's managed AI gateway using the official OpenAI and Anthropic SDKs.",
   "scripts": {
     "quickstart-openai": "node src/examples/quickstart-openai.mjs",
     "quickstart-anthropic": "node src/examples/quickstart-anthropic.mjs",

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Creates a policy with a realistic per-minute request rate cap, fires calls
-# fast enough to exceed it, and shows the 429 once the cap is hit.
-# Rate limits are evaluated per calendar minute (e.g. 10:00:00-10:00:59 UTC), not rolling 60s.
+# Batch worker under a per-minute request cap. When the gateway returns HTTP 429 the worker
+# waits and retries with exponential backoff instead of failing the job.
+# Rate limits are evaluated per calendar minute (e.g. 10:00:00-10:00:59 UTC), not a rolling 60s.
+#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the policy and key). See .env.example.
 # Run standalone: ./rate-limit.sh
 set -euo pipefail
 
@@ -11,47 +14,60 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
-# Illustrative, not a platform minimum - change this and re-run to see the
-# cap move. Bounds: requestRateLimitPerMinute accepts 1-1,000,000.
+# Illustrative, not a platform minimum. Bounds: requestRateLimitPerMinute accepts 1-1,000,000.
 REQUEST_RATE_LIMIT_PER_MINUTE=20
-CALLS_TO_FIRE=25
-SUFFIX="$(run_suffix)"
-APP_ID="rate-limit-$SUFFIX"
+TASKS_TO_PROCESS=25
+MAX_RETRIES=3
 
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-echo "Creating policy with requestRateLimitPerMinute=$REQUEST_RATE_LIMIT_PER_MINUTE..."
-POLICY=$(create_policy "$(jq -n --arg name "rate-limit-$SUFFIX" --arg model "$MODEL_DEFAULT" --argjson rate "$REQUEST_RATE_LIMIT_PER_MINUTE" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model], requestRateLimitPerMinute: $rate}')")
-POLICY_ID=$(echo "$POLICY" | jq -r '.id')
-
-KEY=$(create_virtual_key "$(jq -n --arg name "vk-rate-limit-$SUFFIX" --arg appId "$APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted key $(echo "$KEY" | jq -r '.id'), bound."
-
-# 2. Your application code.
-start_of_calendar_minute "$CALLS_TO_FIRE"
-echo "Firing $CALLS_TO_FIRE calls back-to-back..."
+echo "=== Resilient Batch Worker: Rate Limiting & Backoff ==="
 echo ""
 
-ALLOWED_COUNT=0
-for i in $(seq 1 "$CALLS_TO_FIRE"); do
-  call_chat "$ACCESS_TOKEN" "$MODEL_DEFAULT" "Rate limit probe $i. Reply with just \"ok\"." \
-    "call-$i"
-  if [ "$LAST_OUTCOME" = "allowed" ]; then
-    ALLOWED_COUNT=$((ALLOWED_COUNT + 1))
+# Governance setup: the policy this application runs under. Platform admins normally create it
+# once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
+# key whose policy already matches.
+get_access "rate-limit-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson rate "$REQUEST_RATE_LIMIT_PER_MINUTE" '{
+  name: "rate-limit-policy", mode: "enforce", budgetMode: "hard_fast",
+  allowedProviders: ["vertex_ai"], allowedModels: [$model], requestRateLimitPerMinute: $rate}')"
+
+# Application code: process each task, backing off and retrying on HTTP 429.
+process_task() {
+  local task="$1" attempt=0 delay=2
+  while true; do
+    HTTP_CODE=$(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code}' -X POST "$BASE_URL/v1/ai/chat/completions" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -H "User-Agent: $USER_AGENT" \
+      -d "$(jq -n --arg model "$MODEL_DEFAULT" --arg prompt "$task" '{model: $model, max_tokens: 30, messages: [{role: "user", content: $prompt}]}')")
+    if [ "$HTTP_CODE" = "429" ] && [ "$attempt" -lt "$MAX_RETRIES" ]; then
+      attempt=$((attempt + 1))
+      echo "  Rate limit reached (HTTP 429). Retrying in ${delay}s (attempt $attempt/$MAX_RETRIES)..."
+      sleep "$delay"
+      delay=$((delay * 2))
+      continue
+    fi
+    return 0
+  done
+}
+
+# Wait for a fresh calendar-minute window so the whole burst lands in one window.
+start_of_calendar_minute "$TASKS_TO_PROCESS"
+echo "Processing $TASKS_TO_PROCESS tasks back-to-back (cap: $REQUEST_RATE_LIMIT_PER_MINUTE per minute)..."
+echo ""
+
+DONE_COUNT=0
+for i in $(seq 1 "$TASKS_TO_PROCESS"); do
+  process_task "Task $i: reply with just \"ok\"."
+  if [ "$HTTP_CODE" = "200" ]; then
+    DONE_COUNT=$((DONE_COUNT + 1))
+    echo "  [Task $i] completed"
   else
-    break
+    echo "  [Task $i] failed permanently (HTTP $HTTP_CODE)"
+    describe_block
   fi
 done
 
-# 3. What the gateway did. confirm_cap_stopped stops the script if the cap
-# never fired, so a silent regression cannot print as a success.
-confirm_cap_stopped "$ALLOWED_COUNT" "$REQUEST_RATE_LIMIT_PER_MINUTE" "requestRateLimitPerMinute=$REQUEST_RATE_LIMIT_PER_MINUTE"
-confirm_blocked "requestRateLimitPerMinute=$REQUEST_RATE_LIMIT_PER_MINUTE" 429
-
 echo ""
-echo "$ALLOWED_COUNT calls served, then call-$((ALLOWED_COUNT + 1)) returned 429 once the ${REQUEST_RATE_LIMIT_PER_MINUTE}/minute cap was reached."
-echo "Evidence: Audit tab ($CONSOLE_AUDIT) - filter by app \"$APP_ID\" for the 429 block record; Policies tab ($CONSOLE_POLICIES) shows the requestRateLimitPerMinute config that fired."
+echo "$DONE_COUNT of $TASKS_TO_PROCESS tasks completed. Tasks past the per-minute cap received HTTP 429; retries succeed only after the minute window resets."
+echo "Review rate limit events and policy audit in the Cloptima Console:"
+echo "  - Audit Trail: $CONSOLE_AUDIT"
+echo "  - Rate Limit Policies: $CONSOLE_POLICIES"

@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# One policy allowlisting several Vertex AI Gemini model variants (default
-# flash-lite and higher-performance flash variants), mints a key,
-# and calls each once - the "one policy, several models, compare cost and
-# latency" story. These examples are built with Gemini models; bring your
-# own credentials for other providers/models via the byok example.
+# One policy allowlisting two Vertex AI Gemini models. The application calls each model through
+# the same virtual key and compares latency and token usage.
 #
-# A model here can fail for two very different reasons:
-#   - policy/model block (403)  -> the model isn't allowed by this policy
-#   - missing pricing (402/403) -> the model is allowed, but the gateway's
-#     pricing catalog doesn't have a cost entry for it yet, so a spend-
-#     limited path fails closed. That's a pricing-catalog gap, not a sign
-#     the model itself is unsupported - check the printed reason below.
+# A model can fail for two reasons: the policy does not allow it (403), or it is allowed but
+# has no pricing entry yet so a spend-limited path fails closed. The script prints the gateway's
+# reason for any failure.
+#
+# Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
+# (also creates the policy and key). See .env.example.
 # Run standalone: ./multi-model.sh
 set -euo pipefail
 
@@ -23,39 +20,37 @@ MODELS=(
   "vertex_ai/gemini-3.5-flash-lite"
   "vertex_ai/gemini-3.8-flash"
 )
-SUFFIX="$(run_suffix)"
-APP_ID="multi-model-$SUFFIX"
 
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-echo "Creating policy allowlisting ${#MODELS[@]} Vertex AI Gemini model variants..."
-MODELS_JSON=$(printf '%s\n' "${MODELS[@]}" | jq -R . | jq -s .)
-POLICY=$(create_policy "$(jq -n --arg name "multi-model-$SUFFIX" --argjson models "$MODELS_JSON" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: $models}')")
-POLICY_ID=$(echo "$POLICY" | jq -r '.id')
-echo "  policy $(echo "$POLICY" | jq -r '.name') -> $POLICY_ID"
-
-KEY=$(create_virtual_key "$(jq -n --arg name "vk-multi-model-$SUFFIX" --arg appId "$APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-ACCESS_TOKEN=$(echo "$KEY" | jq -r '.accessToken')
-create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted key $(echo "$KEY" | jq -r '.id'), bound. Calling each model once..."
+echo "=== Multi-Model Gateway: Unified Model Comparison ==="
 echo ""
 
-# 2. Your application code.
+# Governance setup: one policy allowlisting both models. Platform admins normally create it
+# once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
+# key whose policy already matches.
+get_access "multi-model-demo" "$(jq -n --argjson models "$(printf '%s\n' "${MODELS[@]}" | jq -R . | jq -s .)" '{
+  name: "multi-model-policy", mode: "enforce", budgetMode: "hard_fast",
+  allowedProviders: ["vertex_ai"], allowedModels: $models}')"
+
+# Application code: the same request against each model.
+PROMPT="Explain the difference between vertical and horizontal autoscaling in 2 sentences."
+echo "Evaluating prompt across ${#MODELS[@]} models: \"$PROMPT\""
+echo ""
 for model in "${MODELS[@]}"; do
-  call_chat "$ACCESS_TOKEN" "$model" "In one short sentence, name the model you are." \
-    "$model"
-  jq -c '{status: (.error // .choices[0].message.content // .)}' "$RESP_BODY_FILE" 2>/dev/null || cat "$RESP_BODY_FILE"
-  # 3. What the gateway did. Every model listed in allowedModels must be served.
-  confirm_allowed "allowedModels includes $model"
+  echo "--- Model: $model ---"
+  read -r HTTP_CODE TIME_TOTAL < <(curl -sS -o "$RESP_BODY_FILE" -w '%{http_code} %{time_total}\n' -X POST "$BASE_URL/v1/ai/chat/completions" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: $USER_AGENT" \
+    -d "$(jq -n --arg model "$model" --arg prompt "$PROMPT" '{model: $model, messages: [{role: "user", content: $prompt}]}')")
+  if [ "$HTTP_CODE" = "200" ]; then
+    jq -r --arg t "$TIME_TOTAL" '"Assistant: \(.choices[0].message.content)\nMetrics: \($t)s latency | \(.usage.total_tokens) tokens (\(.usage.prompt_tokens) in / \(.usage.completion_tokens) out)"' "$RESP_BODY_FILE"
+  else
+    echo "Error calling $model (HTTP $HTTP_CODE):"
+    describe_block
+  fi
+  echo ""
 done
 
-echo ""
-echo "Confirmed: all ${#MODELS[@]} allowlisted models served under one policy."
-echo ""
-echo "If any model above came back blocked with a pricing-related reason rather than a policy/model-allow reason,"
-echo "that means the model is real and allowlisted but the gateway pricing catalog needs a cost entry for it -"
-echo "check the pricing catalog/overlay, not the policy."
-echo ""
-echo "Evidence: Explorer tab ($CONSOLE_SPEND) - filter by app \"$APP_ID\" to compare cost and latency across every model called above."
+echo "Compare aggregate cost and latency per model in the Cloptima Console:"
+echo "  - Explorer: $CONSOLE_SPEND"
+echo "  - Recommendations: $CONSOLE_RECOMMENDATIONS"

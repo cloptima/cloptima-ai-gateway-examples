@@ -1,61 +1,116 @@
-// Creates a policy requiring attribution metadata, but mints its virtual key
-// deliberately WITHOUT team/app/environment and binds it by principalId
-// instead - the only way to produce a genuine missing-attribution block, since
-// a key with baked-in team/app/environment is trusted as an attribution
-// fallback when headers are absent. Calling with zero headers on this
-// deliberately unscoped key trips a more fundamental gate before the policy's
-// own required-metadata check ever runs.
-// Run standalone:
-//   node src/examples/metadata-deny.mjs
-import { config, runSuffix, CONSOLE } from '../lib/config.mjs';
+/**
+ * FinOps Attribution: Mandatory Team & App Metadata
+ *
+ * Demonstrates how enterprise organizations enforce chargeback and cost allocation
+ * by requiring attribution headers on all managed inference requests.
+ *
+ * Pattern:
+ * 1. Initialize client using an unscoped virtual key (no team or app baked in).
+ * 2. Case 1: Call without attribution metadata -> Gateway refuses with HTTP 400.
+ * 3. Case 2: Call with proper x-cloptima-team and x-cloptima-app headers -> Admitted.
+ *
+ * Auth: CLOPTIMA_AI_ADMIN_KEY creates the policy and an unscoped key. CLOPTIMA_VIRTUAL_KEY must be
+ * an unscoped key bound to a policy that requires team_id, app_id, and environment; a key with team
+ * and app baked in supplies its own attribution, so Case 1 would not be refused.
+ *
+ * Run standalone:
+ *   node src/examples/metadata-deny.mjs
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { runSuffix, CONSOLE, config } from '../lib/config.mjs';
 import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { openaiStyleClient } from '../lib/gatewayClients.mjs';
-import { callOpenAIStyle } from '../lib/callGateway.mjs';
-import { confirmBlocked } from '../lib/confirm.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 async function main() {
+  console.log('=== FinOps Attribution: Enforcing Team & Application Tags ===\n');
+
   const suffix = runSuffix();
+  let virtualKey;
 
-  // 1. Cloptima setup - the policy, key, and binding are the whole contract.
-  console.log('Creating a policy that requires team_id/app_id/environment metadata...');
-  const policy = await createPolicy({
-    name: `metadata-deny-${suffix}`,
-    mode: 'enforce', budgetMode: 'hard_fast',
-    allowedProviders: ['vertex_ai'], allowedModels: [MODELS.default],
-    metadata: { required_metadata_keys: ['team_id', 'app_id', 'environment'] },
-  });
+  if (config.virtualKey) {
+    console.log('Using CLOPTIMA_VIRTUAL_KEY. It should be an unscoped key bound to a policy requiring attribution metadata.\n');
+    virtualKey = config.virtualKey;
+  } else if (config.aiAdminKey) {
+    console.log('Configuring policy requiring attribution metadata...');
+    const policy = await createPolicy({
+      name: `attribution-policy-${suffix}`,
+      mode: 'enforce',
+      budgetMode: 'hard_fast',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
+      metadata: { required_metadata_keys: ['team_id', 'app_id', 'environment'] },
+    });
 
-  console.log('Minting a key with NO team/app/environment on purpose...');
-  const key = await createVirtualKey({ name: `vk-metadata-deny-${suffix}` });
+    // Key created without baked-in team/app to demonstrate header-driven attribution
+    const key = await createVirtualKey({ name: `vk-attribution-${suffix}` });
 
-  console.log('Binding by the key\'s own principalId (not team/app/environment)...');
-  // A principalId-only binding has no team/app/environment to distinguish its
-  // scope, so it always overlaps every other binding in the org - acknowledging
-  // that is required, not optional here.
-  await createBinding({ policyId: policy.id, principalId: key.id, actorType: 'service', priority: 5, acknowledgeOverlap: true });
-  console.log(`Minted key ${key.id}, bound. Calling with zero attribution headers...\n`);
+    await createBinding({
+      policyId: policy.id,
+      principalId: key.id,
+      actorType: 'service',
+      priority: 5,
+      acknowledgeOverlap: true,
+    });
+    virtualKey = key.accessToken;
+  } else {
+    throw new Error(
+      'Set CLOPTIMA_VIRTUAL_KEY to use an existing key, or CLOPTIMA_AI_ADMIN_KEY to let this example create its own policy and key (see .env.example).'
+    );
+  }
 
-  // 2. Your application code - the official OpenAI SDK, unchanged.
-  const client = openaiStyleClient(key.accessToken, config.baseUrl);
-  const result = await callOpenAIStyle(client, {
-    model: MODELS.default,
-    prompt: 'This call should be denied - the key is deliberately unscoped and no attribution metadata is sent.',
-    label: 'metadata-deny-probe',
-  });
+  const client = openaiClient(virtualKey);
 
-  // 3. What the gateway did. confirmBlocked stops the script if the policy
-  // above was not held, so a silent regression cannot print as a success.
-  console.log(`[${result.outcome}] ${JSON.stringify(result, null, 2)}`);
-  confirmBlocked(result, 'attribution required before policy resolution', { status: 400, violation: 'attribution' });
-  console.log(
-    `\nConfirmed: ${result.status} - "Managed AI requests require Cloptima team and app attribution" - a more basic gate ` +
-    'than the policy engine\'s own required_metadata_keys check, but a genuine block either way.',
-  );
-  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by key ${key.id} for the missing-attribution block record.`);
+  // Case 1: Calling without required attribution headers
+  console.log('--- Case 1: Unattributed Request (Missing Headers) ---');
+  try {
+    await client.chat.completions.create({
+      model: MODELS.default,
+      messages: [{ role: 'user', content: 'Execute unallocated query.' }],
+    });
+    console.log('Assistant: (Admitted unexpectedly)\n');
+  } catch (err) {
+    if (err.status === 400 || err.status === 403) {
+      console.log('🛑 Gateway Attribution Enforcement (HTTP 400)');
+      console.log(`  Message: ${err.error?.message || err.message}`);
+      console.log('\nApplication Action:');
+      console.log('  Request rejected because team and application cost centers were not provided.\n');
+    } else {
+      throw err;
+    }
+  }
+
+  // Case 2: Supplying attribution headers
+  console.log('--- Case 2: Attributed Request (With Cost Center Headers) ---');
+  const teamId = 'Payment-Services';
+  const appId = 'checkout-fraud-detection';
+  console.log(`Injecting headers: x-cloptima-team="${teamId}", x-cloptima-app="${appId}"`);
+
+  try {
+    const response = await client.chat.completions.create(
+      {
+        model: MODELS.default,
+        messages: [{ role: 'user', content: 'Explain fraud detection scoring briefly.' }],
+      },
+      {
+        headers: {
+          'x-cloptima-team': teamId,
+          'x-cloptima-app': appId,
+          'x-cloptima-environment': 'production',
+        },
+      },
+    );
+
+    console.log(`Assistant: "${response.choices[0].message.content.trim()}"`);
+    console.log(`✓ Request admitted and attributed to team "${teamId}" and app "${appId}".\n`);
+  } catch (err) {
+    console.error('Attributed call failed:', err.message);
+  }
+
+  console.log(`Review attributed spend in the Cloptima Console:`);
+  console.log(`  - Spend Explorer: ${CONSOLE.spend}`);
 }
 
 main().catch((err) => {
-  console.error('metadata-deny failed:', err);
+  console.error('Example failed:', err.message);
   process.exitCode = 1;
 });

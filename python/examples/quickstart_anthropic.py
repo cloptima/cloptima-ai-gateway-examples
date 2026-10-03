@@ -1,57 +1,75 @@
-"""Same idea as quickstart_openai.py, using the Anthropic SDK's own calling
-convention instead - proves both API shapes work against the same gateway.
-Run standalone from python/:
-    python -m examples.quickstart_anthropic
+"""Quickstart: Connecting the Anthropic SDK to Cloptima AI Gateway
+
+Demonstrates standard Anthropic SDK integration:
+1. Initialize the official Anthropic SDK with Cloptima's base URL and virtual key.
+2. Send standard and streaming Messages requests through the gateway.
+3. Inspect usage and request metadata.
+
+Run standalone:
+  python -m examples.quickstart_anthropic
 """
+from anthropic import Anthropic
 
-import json
-
-from lib import config
-from lib.confirm import confirm_allowed
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key
-from lib.gateway_clients import anthropic_style_client
-from lib.call_gateway import call_anthropic_style
-from lib.models import MODEL_DEFAULT
+from lib.access import get_access
+from lib.config import BASE_URL, CONSOLE
+from lib.models import MODELS
 
 
-def main():
-    suffix = config.run_suffix()
-    app_id = f"quickstart-anthropic-{suffix}"
+def main() -> None:
+    print("=== Cloptima AI Gateway: Anthropic SDK Quickstart ===\n")
 
-    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
-    print(f"Creating policy allowing {MODEL_DEFAULT} on the managed Vertex AI provider...")
-    policy = create_policy({
-        "name": f"quickstart-anthropic-{suffix}",
-        "mode": "enforce",
-        "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"],
-        "allowedModels": [MODEL_DEFAULT],
-    })
-    print(f"  policy {policy['name']} -> {policy['id']}")
-
-    print(f"Minting a virtual key attributed to team Quickstart, app {app_id}...")
-    key = create_virtual_key({
-        "name": f"vk-quickstart-anthropic-{suffix}",
-        "teamId": "Quickstart", "appId": app_id, "environment": "dev",
-    })
-    print(f"  key {key['id']}")
-
-    print(f"Binding the policy to app {app_id} - the gateway serves only requests a bound policy covers...")
-    create_binding({"policyId": policy["id"], "teamId": "Quickstart", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print("Bound. Calling the gateway with the official Anthropic SDK...")
-
-    # 2. Your application code - the official Anthropic SDK, unchanged.
-    client = anthropic_style_client(key["accessToken"], config.BASE_URL)
-    result = call_anthropic_style(
-        client, MODEL_DEFAULT,
-        "In one sentence, confirm this call went through Cloptima's managed AI gateway.",
-        "quickstart-anthropic",
+    # Governance setup: the policy this application runs under. Platform admins normally
+    # create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+    # points at a key whose policy already matches.
+    access = get_access(
+        app="quickstart-demo",
+        policy={
+            "name": "quickstart-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+        },
     )
 
-    # 3. What the gateway did.
-    print(f"\n[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
-    confirm_allowed(result, "quickstart call through a bound virtual key")
-    print(f"\nEvidence: Explorer tab ({config.CONSOLE['spend']}) - find this request_id to see attributed spend and usage.")
+    # Application code: the official SDK, pointed at the gateway with a virtual key.
+    client = Anthropic(
+        api_key=access["virtual_key"],
+        base_url=BASE_URL,  # the SDK appends /v1/messages
+    )
+
+    # 1. Standard Messages API Call
+    print("--- 1. Standard Messages API Request ---")
+    response = client.messages.create(
+        model=MODELS["default"],
+        max_tokens=300,
+        messages=[
+            {"role": "user", "content": "What are the main benefits of centralized LLM gateway governance?"},
+        ],
+    )
+
+    text = ""
+    for block in response.content:
+        if hasattr(block, "text"):
+            text += block.text
+    print(f"Assistant:\n  {text.strip()}\n")
+    if response.usage:
+        print(f"Tokens: {response.usage.input_tokens} input, {response.usage.output_tokens} output")
+    print(f"Request ID: {response.id}\n")
+
+    # 2. Streaming Messages Call
+    print("--- 2. Streaming Messages Request ---")
+    print("Assistant: ", end="", flush=True)
+    with client.messages.stream(
+        model=MODELS["default"],
+        max_tokens=100,
+        messages=[{"role": "user", "content": "List 3 cloud cost best practices briefly."}],
+    ) as stream:
+        for delta in stream.text_stream:
+            print(delta, end="", flush=True)
+    print("\n")
+
+    print(f"View live spend, latency, and attribution in the console: {CONSOLE['spend']}")
 
 
 if __name__ == "__main__":

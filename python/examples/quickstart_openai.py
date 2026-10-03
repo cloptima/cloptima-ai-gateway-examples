@@ -1,56 +1,78 @@
-"""Simplest possible working call: mint a policy + virtual key, then call the
-gateway using the official OpenAI SDK. Run standalone from python/:
-    python -m examples.quickstart_openai
+"""Quickstart: Connecting the OpenAI SDK to Cloptima AI Gateway
+
+Demonstrates standard client integration:
+1. Initialize the official OpenAI SDK with Cloptima's base URL and virtual key.
+2. Send standard and streaming chat completion requests.
+3. Inspect request attribution and token usage.
+
+Run standalone:
+  python -m examples.quickstart_openai
 """
+from openai import OpenAI
 
-import json
-
-from lib import config
-from lib.confirm import confirm_allowed
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key
-from lib.gateway_clients import openai_style_client
-from lib.call_gateway import call_openai_style
-from lib.models import MODEL_DEFAULT
+from lib.access import get_access
+from lib.config import BASE_URL, CONSOLE
+from lib.models import MODELS
 
 
-def main():
-    suffix = config.run_suffix()
-    app_id = f"quickstart-openai-{suffix}"
+def main() -> None:
+    print("=== Cloptima AI Gateway: OpenAI SDK Quickstart ===\n")
 
-    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
-    print(f"Creating policy allowing {MODEL_DEFAULT} on the managed Vertex AI provider...")
-    policy = create_policy({
-        "name": f"quickstart-openai-{suffix}",
-        "mode": "enforce",
-        "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"],
-        "allowedModels": [MODEL_DEFAULT],
-    })
-    print(f"  policy {policy['name']} -> {policy['id']}")
-
-    print(f"Minting a virtual key attributed to team Quickstart, app {app_id}...")
-    key = create_virtual_key({
-        "name": f"vk-quickstart-openai-{suffix}",
-        "teamId": "Quickstart", "appId": app_id, "environment": "dev",
-    })
-    print(f"  key {key['id']}")
-
-    print(f"Binding the policy to app {app_id} - the gateway serves only requests a bound policy covers...")
-    create_binding({"policyId": policy["id"], "teamId": "Quickstart", "appId": app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print("Bound. Calling the gateway with the official OpenAI SDK...")
-
-    # 2. Your application code - the official OpenAI SDK, unchanged.
-    client = openai_style_client(key["accessToken"], config.BASE_URL)
-    result = call_openai_style(
-        client, MODEL_DEFAULT,
-        "In one sentence, confirm this call went through Cloptima's managed AI gateway.",
-        "quickstart-openai",
+    # Governance setup: the policy this application runs under. Platform admins normally
+    # create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+    # points at a key whose policy already matches.
+    access = get_access(
+        app="quickstart-demo",
+        policy={
+            "name": "quickstart-policy",
+            "mode": "enforce",
+            "budgetMode": "hard_fast",
+            "allowedProviders": ["vertex_ai"],
+            "allowedModels": [MODELS["default"]],
+        },
     )
 
-    # 3. What the gateway did.
-    print(f"\n[{result['outcome']}] {json.dumps(result, indent=2, default=str)}")
-    confirm_allowed(result, "quickstart call through a bound virtual key")
-    print(f"\nEvidence: Explorer tab ({config.CONSOLE['spend']}) - find this request_id to see attributed spend and usage.")
+    # Application code: the official SDK, pointed at the gateway with a virtual key.
+    # Tip: In production services where you want to inspect policy/guardrail block details
+    # (such as err.body["violations"] and err.body["reason"]), use the client helper from
+    # lib/client.py which preserves these gateway fields on raised SDK errors.
+    client = OpenAI(
+        api_key=access["virtual_key"],
+        base_url=f"{BASE_URL}/v1/ai",  # the SDK appends /chat/completions
+    )
+
+    # 1. Standard Chat Completion
+    print("--- 1. Standard Chat Completion ---")
+    completion = client.chat.completions.create(
+        model=MODELS["default"],
+        messages=[
+            {"role": "system", "content": "You are a helpful cloud engineer."},
+            {"role": "user", "content": "Explain what an AI gateway does in one clear sentence."},
+        ],
+    )
+
+    content = completion.choices[0].message.content or ""
+    print(f"Assistant: {content.strip()}")
+    if completion.usage:
+        print(f"Tokens: {completion.usage.total_tokens} (prompt: {completion.usage.prompt_tokens}, completion: {completion.usage.completion_tokens})")
+    print(f"Request ID: {completion.id}\n")
+
+    # 2. Streaming Chat Completion
+    print("--- 2. Streaming Chat Completion ---")
+    stream = client.chat.completions.create(
+        model=MODELS["default"],
+        messages=[{"role": "user", "content": "Count from 1 to 5 with commas."}],
+        stream=True,
+    )
+
+    print("Assistant: ", end="", flush=True)
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else ""
+        if delta:
+            print(delta, end="", flush=True)
+    print("\n")
+
+    print(f"View live spend, latency, and attribution in the console: {CONSOLE['spend']}")
 
 
 if __name__ == "__main__":

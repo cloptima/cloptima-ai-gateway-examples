@@ -2,7 +2,7 @@
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/cloptima/cloptima-ai-gateway-examples)
 
-Self-contained examples for integrating with Cloptima's managed AI gateway: virtual keys, attribution, policy enforcement, rate/token/budget limits, agentic-runaway limits, PII/secret guardrails, caching, unit economics/ROI, bring-your-own-key (BYOK), and multi-model policies via Vertex AI (several Gemini variants under one policy).
+Examples of how to integrate an application with Cloptima's managed AI gateway using the official `openai` and `anthropic` SDKs, and how your code behaves when a governance control applies: virtual keys, attribution, policy enforcement, rate/token/budget limits, agentic-runaway limits, PII/secret guardrails, caching, unit economics/ROI, bring-your-own-key (BYOK), and multi-model policies.
 
 Don't want to run anything locally? See [`docs/RUNNING_SAFELY.md`](docs/RUNNING_SAFELY.md) for every way to run these - your own agent's sandbox, a Docker container, GitHub Codespaces, or the console with no code at all.
 
@@ -25,40 +25,24 @@ Every example is independent - it creates whatever policy, virtual key, and bind
 
 ## Start here
 
-Start with an `ai:admin` management key. That key can create the policies, bindings, virtual keys, and provider credentials used by the examples, and the gateway URL is already built into the example code.
+Integrating an application takes two changes to your existing SDK setup: use a Cloptima virtual key as the API key, and point the base URL at the gateway. The [Node README](node/README.md#integrating-in-two-lines) shows both snippets.
 
-The two managed-provider guardrail examples also require an available Cloptima managed-credit balance because their Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails scans are billable.
+Each example then adds one governance control and shows the application code that works with it. Every example is split into a **Governance setup** block (the policy, guardrail profile, or tool server the scenario runs under) and the **application code** you would copy into your own service.
 
-If you don't have a key, you can generate one in the Cloptima Console under Settings > API Keys.
+Credentials:
 
-## Suggested Validation Tour
+- **Node, Python, and shell**: set `CLOPTIMA_VIRTUAL_KEY` to run only the application code against a key you already have, or set `CLOPTIMA_AI_ADMIN_KEY` and the example creates its own policy, key, and binding. Examples that configure governance resources (approvals, MCP tool servers, prompts, price sheets, ROI, session audit) need the admin key.
 
-To systematically validate the platform's capabilities as an independent analyst or AI agent, the examples are structured into three progressive evaluation phases. We recommend running at least one core example from each phase in order:
+Generate either key in the Cloptima Console under Settings > API Keys. The two managed-provider guardrail examples also need an available Cloptima managed-credit balance, because their Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails scans are billable.
 
-### Phase 1: Core Gateway & Policy Enforcement (Essential)
-These validate baseline proxying, multi-model routing, cost limits, and real-time guardrails.
-* **`quickstart-openai` (or `quickstart-anthropic`)**: Proves the gateway proxying works.
-* **`multi-model`**: Compares cost/latency across model variants under a single policy.
-* **`budget-limit`**: Verifies real-time budget depletion and enforcement.
-* **`pii-guardrail`**: Verifies a profile custom rule blocks a configured personal-data format.
-* **`byok`**: Routes traffic securely via bring-your-own-key credentials.
+## Suggested path
 
-### Phase 2: Advanced Governance & Queues (Critical Gates)
-These validate the platform's approval workflows, cache enforcement gates, tool safety registries, and prompt quality thresholds.
-* **`approval-workflow`**: Proves manual policy modifications sit pending in the governance queue until approved.
-* **`semantic-cache-enforce`**: Demonstrates the semantic cache enforcement approval lifecycle.
-* **`mcp-tool-governance`**: Verifies that new MCP tool servers default to `disabled` and require security review before they can be called.
-* **`prompt-release-workflow`**: Runs a multi-case quality evaluation on a golden dataset, demonstrating failed-gate block and successful activation via `applyImmediately`.
-* **`session-trace-audit`**: Demonstrates tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification.
-
-### Phase 3: Financial & ROI Analytics
-These validate cost-basis accounting and business return-on-investment telemetry.
-* **`exact-semantic-cache`**: Demonstrates cost savings from Cloptima's exact and semantic response cache.
-* **`conversation-prompt-caching`**: Demonstrates provider-side prompt prefix caching on a growing multi-turn conversation.
-* **`unit-economics-roi`**: Computes business profit-center and cost-center ROI.
-* **`contract-pricing`**: Compares retail costs vs commitment-tier negotiated contract rates on customer-owned provider credentials (BYOK).
-
-*(Note: alternate limit types and edge cases like `rate-limit`, `token-limit`, `agentic-runaway`, `provider-deny`, and `metadata-deny` are supplementary depth worth running after completing the core tour).*
+1. **Connect**: `quickstart-openai` or `quickstart-anthropic`.
+2. **Protect**: `pii-guardrail`, `provider-deny`, `mcp-tool-governance`.
+3. **Control cost and load**: `budget-limit`, `rate-limit`, `token-limit`, `agentic-runaway`, `metadata-deny`.
+4. **Optimize**: `multi-model`, `adaptive-routing`, `exact-semantic-cache`, `conversation-prompt-caching`.
+5. **Govern changes**: `approval-workflow`, `semantic-cache-enforce`, `prompt-release-workflow`.
+6. **Prove value**: `unit-economics-roi`, `contract-pricing`, `session-trace-audit`, `byok`.
 
 ## Pick a stack
 
@@ -107,7 +91,7 @@ See each directory's own README for exact run commands. Every illustrative polic
 
 ## Account Resource Quotas and Cleanup
 
-Each example dynamically provisions its own policy, virtual key, and binding. When running the entire validation tour or repeatedly executing examples, these resources accumulate in the account. Depending on your organization's subscription tier entitlements, you may encounter an error if you exceed account-level resource limits (such as the maximum allowed policies or active virtual keys).
+Each example dynamically provisions its own policy, virtual key, and binding. When you run many examples or run them repeatedly, these resources accumulate in the account. Depending on your organization's subscription tier entitlements, you may encounter an error if you exceed account-level resource limits (such as the maximum allowed policies or active virtual keys).
 
 Each language directory includes a `cleanup` utility to reset your account's gateway resources:
 
@@ -115,7 +99,7 @@ Each language directory includes a `cleanup` utility to reset your account's gat
 - **Python**: `python -m examples.cleanup` (or `python -m examples.cleanup --force`)
 - **Shell**: `./cleanup.sh` (or `./cleanup.sh --force`)
 
-You can run this cleanup script before starting the validation tour to ensure a clean state, or after completing your evaluation run.
+You can run this cleanup script to start from a clean state, or after you finish.
 
 > [!WARNING]
 > **Account-Wide Deletion Warning**: The cleanup script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, eval datasets, and ROI calibrations; archives **all** prompt templates and price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the authenticated account.

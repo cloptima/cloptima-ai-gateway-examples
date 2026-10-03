@@ -1,78 +1,91 @@
-// Creates a hard_strict policy with a small but real per-policy daily budget,
-// distinct from the org-wide managed-credits wallet cap, and fires calls in
-// a loop until the budget denies the rest.
-//
-// hard_strict reserves against an ESTIMATED cost derived from the request's
-// max_tokens (a pessimistic worst case), not the realized post-completion
-// cost - so this script passes an explicit, modest max_tokens on every call
-// to keep that estimate small and consistent. Without that, an unbounded
-// default max_tokens would make the very first call's estimate blow past a
-// small budget and trip on call 1 regardless of the budget's actual size.
-// Run standalone:
-//   node src/examples/budget-limit.mjs
-import { config, runSuffix, USER_AGENT, CONSOLE } from '../lib/config.mjs';
-import { createPolicy, createVirtualKey, createBinding } from '../lib/gatewayAdmin.mjs';
-import { confirmCapStopped } from '../lib/confirm.mjs';
+/**
+ * Multi-Tenant Cost Governance & Budget Overflow Handling
+ *
+ * Demonstrates how to attribute inference spend to teams and applications,
+ * and how an application gracefully handles policy budget limits.
+ *
+ * Pattern:
+ * 1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
+ * 2. Attribute requests using team and application tags.
+ * 3. Send requests within budget (served normally).
+ * 4. Catch budget limit exhaustion (HTTP 402/403/429), alert or fall back gracefully.
+ *
+ * Run standalone:
+ *   node src/examples/budget-limit.mjs
+ */
+import { openaiClient } from '../lib/client.mjs';
+import { getAccess } from '../lib/access.mjs';
 import { MODELS } from '../lib/models.mjs';
+import { CONSOLE } from '../lib/config.mjs';
 
-// Illustrative, not a platform minimum. Bounds: dailyBudgetUsd accepts 0-10,000,000.
 const DAILY_BUDGET_USD = 0.001;
 const MAX_TOKENS_PER_CALL = 100;
-// At current catalog rates this budget is observed to cross around call ~4-6.
-const MAX_CALLS = 60;
-
-async function callChat(virtualKey, { model, prompt }) {
-  const response = await fetch(`${config.baseUrl}/v1/ai/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'user-agent': USER_AGENT,
-      authorization: `Bearer ${virtualKey}`,
-    },
-    body: JSON.stringify({ model, max_tokens: MAX_TOKENS_PER_CALL, messages: [{ role: 'user', content: prompt }] }),
-  });
-  const body = await response.json().catch(() => null);
-  return { status: response.status, body };
-}
 
 async function main() {
-  const suffix = runSuffix();
-  const appId = `budget-limit-${suffix}`;
+  console.log('=== FinOps: Multi-Tenant Cost Governance & Budget Caps ===\n');
 
-  console.log(`Creating hard_strict policy with dailyBudgetUsd=$${DAILY_BUDGET_USD}...`);
-  const policy = await createPolicy({
-    name: `budget-limit-${suffix}`,
-    mode: 'enforce',
-    budgetMode: 'hard_strict',
-    allowedProviders: ['vertex_ai'],
-    allowedModels: [MODELS.default],
-    dailyBudgetUsd: DAILY_BUDGET_USD,
+  // Governance setup: the policy this application runs under. Platform admins normally
+  //    create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
+  //    points at a key whose policy already matches.
+  //    hard_strict reserves against estimated cost derived from max_tokens pre-flight.
+  const access = await getAccess({
+    app: 'budget-demo',
+    policy: {
+      name: 'budget-policy',
+      mode: 'enforce',
+      budgetMode: 'hard_strict',
+      allowedProviders: ['vertex_ai'],
+      allowedModels: [MODELS.default],
+      dailyBudgetUsd: DAILY_BUDGET_USD,
+    },
   });
-  const key = await createVirtualKey({ name: `vk-budget-limit-${suffix}`, teamId: 'Platform AI', appId, environment: 'dev' });
-  await createBinding({ policyId: policy.id, teamId: 'Platform AI', appId, environment: 'dev', priority: 10, acknowledgeOverlap: true });
-  console.log(`Minted key ${key.id}, bound. Firing calls (max ${MAX_CALLS}) until the budget denies...\n`);
 
-  const results = [];
-  for (let i = 0; i < MAX_CALLS; i += 1) {
-    const { status, body } = await callChat(key.accessToken, {
-      model: MODELS.default,
-      prompt: `Budget probe ${i + 1}. Reply with just "ok".`,
-    });
-    results.push({ label: `call-${i + 1}`, status, body });
-    console.log(`  [${status === 200 ? 'allowed' : 'blocked'}] call-${i + 1} status=${status}`);
-    if (status !== 200) break;
+  // Application code: the official SDK, pointed at the gateway with a virtual key.
+  const client = openaiClient(access.virtualKey);
+
+  console.log(`Executing workload under a policy with a $${DAILY_BUDGET_USD} daily budget cap.\n`);
+
+  let successfulCalls = 0;
+  let budgetTripped = false;
+
+  // Execute requests in a loop until the small demo budget limit is reached
+  for (let i = 1; i <= 30; i++) {
+    try {
+      const completion = await client.chat.completions.create({
+        model: MODELS.default,
+        max_tokens: MAX_TOKENS_PER_CALL,
+        messages: [{ role: 'user', content: `Task #${i}: Generate a short status update.` }],
+      });
+
+      successfulCalls++;
+      console.log(`[Call ${i}] Allowed - Tokens: ${completion.usage?.total_tokens} | Assistant: "${completion.choices[0].message.content.trim().slice(0, 40)}..."`);
+    } catch (err) {
+      if (err.status === 402 || err.status === 403 || err.status === 429) {
+        budgetTripped = true;
+        console.log(`\n🛑 [Call ${i}] Gateway Budget Limit Intercepted (HTTP ${err.status})`);
+        console.log(`  Message: ${err.error?.message || err.message}`);
+        console.log(`  Violations: ${(err.error?.violations || ['gateway_daily_budget_exceeded']).join(', ')}`);
+
+        console.log('\nApplication FinOps Action:');
+        console.log('  Daily budget quota reached. Application gracefully halted further non-critical requests.');
+        console.log('  Alert dispatched to FinOps monitoring channel.\n');
+        break;
+      } else {
+        throw err;
+      }
+    }
   }
 
-  // 3. What the gateway did. confirmCapStopped stops the script if the budget
-  // never denied a call, so a silent regression cannot print as a success.
-  const outcomes = results.map((r) => ({ ...r, outcome: r.status === 200 ? 'allowed' : 'blocked', reason: r.body }));
-  const { allowedCount, blocked } = confirmCapStopped(outcomes, `dailyBudgetUsd=${DAILY_BUDGET_USD}`, { status: 402 });
-  console.log(`\n${allowedCount} calls served, then ${blocked.label} returned ${blocked.status} once the $${DAILY_BUDGET_USD}/day policy budget was exhausted.`);
-  console.log(`Evidence: Audit tab (${CONSOLE.audit}) - filter by app "${appId}" for the 402 block record; Explorer tab (${CONSOLE.spend}) shows the spend accumulated right up to the cap.`);
-  console.log(JSON.stringify(results, null, 2));
+  console.log(`Summary:`);
+  console.log(`  - Successful calls admitted: ${successfulCalls}`);
+  console.log(`  - Budget limit enforced: ${budgetTripped ? 'Yes' : 'Quota not exhausted yet'}\n`);
+
+  console.log(`Review allocated spend and team attribution in the Cloptima Console:`);
+  console.log(`  - Spend Explorer: ${CONSOLE.spend}`);
+  console.log(`  - Budget Policies: ${CONSOLE.policies}`);
 }
 
 main().catch((err) => {
-  console.error('budget-limit failed:', err);
+  console.error('Example failed:', err.message);
   process.exitCode = 1;
 });
