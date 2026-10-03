@@ -36,6 +36,16 @@ def create_policy(input_data: dict) -> dict:
     return data["createLLMGatewayPolicy"]
 
 
+def create_guardrail_profile(input_data: dict) -> dict:
+    data = graphql(
+        """mutation CreateGuardrailProfile($input: LLMGuardrailProfileInput!) {
+          createLLMGuardrailProfile(input: $input) { id name publishedVersion { version } }
+        }""",
+        {"input": input_data},
+    )
+    return data["createLLMGuardrailProfile"]
+
+
 def create_virtual_key(input_data: dict) -> dict:
     data = graphql(
         """mutation CreateKey($input: CreateLLMGatewayKeyInput!) {

@@ -1,9 +1,11 @@
 /**
  * Automated cleanup script for Cloptima AI gateway example resources.
  *
- * WARNING: This script permanently deletes all AI gateway policies, policy
- * bindings, registered tool servers, and pending approvals, and revokes all
- * active virtual keys in the authenticated account.
+ * WARNING: This script permanently deletes every AI gateway policy, policy
+ * binding, guardrail profile, registered tool server, eval dataset, and ROI
+ * calibration in the authenticated account. It also archives prompt templates
+ * and price sheets, revokes all active virtual keys and provider credentials,
+ * and rejects all pending approvals.
  *
  * Intended for sandbox, testing, or demo environments to clean up resources
  * before or after evaluating example scripts.
@@ -23,54 +25,94 @@ const isForce = process.argv.includes('--force') ||
   process.env.CI === 'true' ||
   process.env.NONINTERACTIVE === 'true';
 
-const CONTROL_PLANE_QUERY = `
-  query GetControlPlaneAndApprovals {
+const INVENTORY_QUERY = `
+  query GetCleanupInventory {
     llmGatewayControlPlane {
       bindings { id policyId teamId appId }
       policies { id name }
       keys { id name status }
+      credentials { id displayName status }
       toolServers { id name }
     }
-    llmGatewayApprovals(status: "pending", limit: 100) {
-      id
-      approvalType
-      status
-    }
+    llmGuardrailProfiles { id name }
+    llmGatewayApprovals(status: "pending", limit: 100) { id approvalType status }
+    llmPromptTemplates(limit: 100) { id name }
+    llmDatasets(limit: 100) { id name }
+    llmContractPriceSheets { id name status }
+    llmROICalibrations { id }
   }
 `;
 
-const DELETE_BINDING_MUTATION = `
-  mutation DeleteBinding($id: ID!) {
-    deleteLLMGatewayPolicyBinding(id: $id)
-  }
-`;
-
-const DELETE_POLICY_MUTATION = `
-  mutation DeletePolicy($id: ID!) {
-    deleteLLMGatewayPolicy(id: $id)
-  }
-`;
-
-const DELETE_TOOL_SERVER_MUTATION = `
-  mutation DeleteToolServer($id: ID!) {
-    deleteLLMGatewayToolServer(id: $id)
-  }
-`;
-
-const REVOKE_KEY_MUTATION = `
-  mutation RevokeKey($id: ID!) {
-    revokeLLMGatewayKey(id: $id)
-  }
-`;
-
-const REJECT_APPROVAL_MUTATION = `
-  mutation RejectApproval($id: ID!, $input: LLMGatewayApprovalReviewInput!) {
-    reviewLLMGatewayApproval(id: $id, input: $input) {
-      id
-      status
-    }
-  }
-`;
+// Each step removes one resource type. Order matters: bindings go before the
+// policies they reference, and policies go before the guardrail profiles they
+// reference.
+const STEPS = [
+  {
+    label: 'policy binding(s)',
+    items: (d) => d.llmGatewayControlPlane.bindings,
+    run: (item) => graphql('mutation($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }', { id: item.id }),
+  },
+  {
+    label: 'policy/policies',
+    items: (d) => d.llmGatewayControlPlane.policies,
+    run: (item) => graphql('mutation($id: ID!) { deleteLLMGatewayPolicy(id: $id) }', { id: item.id }),
+  },
+  {
+    label: 'guardrail profile(s)',
+    items: (d) => d.llmGuardrailProfiles,
+    run: (item) => graphql('mutation($id: ID!) { deleteLLMGuardrailProfile(id: $id) }', { id: item.id }),
+  },
+  {
+    label: 'tool server(s)',
+    items: (d) => d.llmGatewayControlPlane.toolServers,
+    run: (item) => graphql('mutation($id: ID!) { deleteLLMGatewayToolServer(id: $id) }', { id: item.id }),
+  },
+  {
+    label: 'active virtual key(s)',
+    verb: 'Revoked',
+    items: (d) => d.llmGatewayControlPlane.keys.filter((k) => k.status !== 'revoked'),
+    run: (item) => graphql('mutation($id: ID!) { revokeLLMGatewayKey(id: $id) }', { id: item.id }),
+  },
+  {
+    label: 'active provider credential(s)',
+    verb: 'Revoked',
+    items: (d) => d.llmGatewayControlPlane.credentials.filter((c) => c.status !== 'revoked'),
+    run: (item) => graphql('mutation($id: ID!) { revokeLLMProviderCredential(id: $id) }', { id: item.id }),
+  },
+  {
+    label: 'pending approval request(s)',
+    verb: 'Rejected',
+    items: (d) => d.llmGatewayApprovals,
+    run: (item) => graphql(
+      `mutation($id: ID!, $input: LLMGatewayApprovalReviewInput!) {
+        reviewLLMGatewayApproval(id: $id, input: $input) { id }
+      }`,
+      { id: item.id, input: { decision: 'reject', reason: 'Automated cleanup' } },
+    ),
+  },
+  {
+    label: 'prompt template(s)',
+    verb: 'Archived',
+    items: (d) => d.llmPromptTemplates,
+    run: (item) => graphql('mutation($id: ID!) { archiveLLMPromptTemplate(id: $id) }', { id: item.id }),
+  },
+  {
+    label: 'eval dataset(s)',
+    items: (d) => d.llmDatasets,
+    run: (item) => graphql('mutation($id: ID!) { deleteLLMDataset(id: $id) }', { id: item.id }),
+  },
+  {
+    label: 'active price sheet(s)',
+    verb: 'Archived',
+    items: (d) => d.llmContractPriceSheets.filter((p) => p.status !== 'archived'),
+    run: (item) => graphql('mutation($id: ID!) { archivePriceSheet(id: $id) { id } }', { id: item.id }),
+  },
+  {
+    label: 'ROI calibration(s)',
+    items: (d) => d.llmROICalibrations,
+    run: (item) => graphql('mutation($id: ID!) { deleteROICalibration(id: $id) }', { id: item.id }),
+  },
+];
 
 async function promptConfirmation() {
   const rl = readline.createInterface({
@@ -92,8 +134,10 @@ async function main() {
   console.log('  WARNING: AI Gateway Account Resource Cleanup');
   console.log('================================================================================');
   console.log('  This script permanently removes ALL AI gateway policies, policy bindings,');
-  console.log('  registered tool servers, and pending approvals, and revokes ALL active');
-  console.log('  virtual keys in the account associated with the configured CLOPTIMA_AI_ADMIN_KEY.');
+  console.log('  guardrail profiles, tool servers, eval datasets, and ROI calibrations;');
+  console.log('  archives ALL prompt templates and price sheets; revokes ALL virtual keys');
+  console.log('  and provider credentials; and rejects ALL pending approvals in the account');
+  console.log('  associated with the configured CLOPTIMA_AI_ADMIN_KEY.');
   console.log();
   console.log(`  Target Gateway: ${config.baseUrl}`);
   console.log();
@@ -110,96 +154,52 @@ async function main() {
     console.log();
   }
 
-  console.log('Fetching existing gateway resources...');
-  const data = await graphql(CONTROL_PLANE_QUERY);
-  const { bindings = [], policies = [], keys = [], toolServers = [] } = data.llmGatewayControlPlane || {};
-  const approvals = data.llmGatewayApprovals || [];
+  let cleanedAny = false;
+  let previousFingerprint;
+  for (;;) {
+    console.log(cleanedAny ? 'Checking for remaining gateway resources...' : 'Fetching existing gateway resources...');
+    const inventory = await graphql(INVENTORY_QUERY);
+    const plan = STEPS.map((step) => ({ ...step, found: step.items(inventory) }));
+    const remaining = plan.reduce((total, step) => total + step.found.length, 0);
 
-  const activeKeys = keys.filter((k) => k.status !== 'revoked');
-
-  console.log(`Found:`);
-  console.log(`  - ${bindings.length} policy binding(s)`);
-  console.log(`  - ${policies.length} policy/policies`);
-  console.log(`  - ${toolServers.length} registered tool server(s)`);
-  console.log(`  - ${activeKeys.length} active virtual key(s) (${keys.length} total)`);
-  console.log(`  - ${approvals.length} pending approval request(s)`);
-  console.log();
-
-  if (
-    bindings.length === 0 &&
-    policies.length === 0 &&
-    toolServers.length === 0 &&
-    activeKeys.length === 0 &&
-    approvals.length === 0
-  ) {
-    console.log('Account is already clean. No resources to delete.');
-    return;
-  }
-
-  // 1. Delete bindings first so policies have no active bindings
-  let deletedBindings = 0;
-  for (const binding of bindings) {
-    try {
-      await graphql(DELETE_BINDING_MUTATION, { id: binding.id });
-      deletedBindings++;
-    } catch (err) {
-      console.warn(`  Failed to delete binding ${binding.id}: ${err.message}`);
+    if (remaining === 0) {
+      console.log(cleanedAny ? '\nCleanup completed successfully.' : 'Account is already clean. No resources to delete.');
+      return;
     }
-  }
-  console.log(`✓ Deleted ${deletedBindings}/${bindings.length} policy binding(s)`);
 
-  // 2. Delete policies
-  let deletedPolicies = 0;
-  for (const policy of policies) {
-    try {
-      await graphql(DELETE_POLICY_MUTATION, { id: policy.id });
-      deletedPolicies++;
-    } catch (err) {
-      console.warn(`  Failed to delete policy ${policy.name} (${policy.id}): ${err.message}`);
+    const fingerprint = plan
+      .flatMap(({ label, found }) => found.map((item) => `${label}:${item.id}`))
+      .sort()
+      .join('|');
+    if (fingerprint === previousFingerprint) {
+      throw new Error('cleanup made no progress; one or more resources remain');
     }
-  }
-  console.log(`✓ Deleted ${deletedPolicies}/${policies.length} policy/policies`);
+    previousFingerprint = fingerprint;
 
-  // 3. Delete tool servers
-  let deletedToolServers = 0;
-  for (const server of toolServers) {
-    try {
-      await graphql(DELETE_TOOL_SERVER_MUTATION, { id: server.id });
-      deletedToolServers++;
-    } catch (err) {
-      console.warn(`  Failed to delete tool server ${server.name} (${server.id}): ${err.message}`);
+    console.log('Found:');
+    for (const { label, found } of plan) console.log(`  - ${found.length} ${label}`);
+    console.log();
+
+    let failures = 0;
+    for (const { label, verb = 'Deleted', found, run } of plan) {
+      let done = 0;
+      for (const item of found) {
+        try {
+          await run(item);
+          done++;
+        } catch (err) {
+          failures++;
+          console.warn(`  Failed on ${label} ${item.name || item.displayName || item.id}: ${err.message}`);
+        }
+      }
+      console.log(`✓ ${verb} ${done}/${found.length} ${label}`);
     }
-  }
-  console.log(`✓ Deleted ${deletedToolServers}/${toolServers.length} tool server(s)`);
 
-  // 4. Revoke active virtual keys
-  let revokedKeys = 0;
-  for (const key of activeKeys) {
-    try {
-      await graphql(REVOKE_KEY_MUTATION, { id: key.id });
-      revokedKeys++;
-    } catch (err) {
-      console.warn(`  Failed to revoke virtual key ${key.name || key.id}: ${err.message}`);
+    if (failures > 0) {
+      throw new Error(`${failures} resource(s) could not be removed`);
     }
+    cleanedAny = true;
   }
-  console.log(`✓ Revoked ${revokedKeys}/${activeKeys.length} active virtual key(s)`);
-
-  // 5. Reject pending approvals
-  let rejectedApprovals = 0;
-  for (const approval of approvals) {
-    try {
-      await graphql(REJECT_APPROVAL_MUTATION, {
-        id: approval.id,
-        input: { decision: 'reject', reason: 'Automated cleanup' },
-      });
-      rejectedApprovals++;
-    } catch (err) {
-      console.warn(`  Failed to reject approval ${approval.id}: ${err.message}`);
-    }
-  }
-  console.log(`✓ Rejected ${rejectedApprovals}/${approvals.length} pending approval request(s)`);
-
-  console.log('\nCleanup completed successfully.');
 }
 
 main().catch((err) => {

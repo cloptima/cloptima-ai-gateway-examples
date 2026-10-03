@@ -1,8 +1,10 @@
 """Automated cleanup script for Cloptima AI gateway example resources.
 
-WARNING: This script permanently deletes all AI gateway policies, policy
-bindings, registered tool servers, and pending approvals, and revokes all
-active virtual keys in the authenticated account.
+WARNING: This script permanently deletes every AI gateway policy, policy
+binding, guardrail profile, registered tool server, eval dataset, and ROI
+calibration in the authenticated account. It also archives prompt templates
+and price sheets, revokes all active virtual keys and provider credentials,
+and rejects all pending approvals.
 
 Intended for sandbox, testing, or demo environments to clean up resources
 before or after evaluating example scripts.
@@ -18,54 +20,96 @@ import sys
 from lib import config
 from lib.gateway_admin import graphql
 
-CONTROL_PLANE_QUERY = """
-query GetControlPlaneAndApprovals {
+INVENTORY_QUERY = """
+query GetCleanupInventory {
   llmGatewayControlPlane {
     bindings { id policyId teamId appId }
     policies { id name }
     keys { id name status }
+    credentials { id displayName status }
     toolServers { id name }
   }
-  llmGatewayApprovals(status: "pending", limit: 100) {
-    id
-    approvalType
-    status
-  }
+  llmGuardrailProfiles { id name }
+  llmGatewayApprovals(status: "pending", limit: 100) { id approvalType status }
+  llmPromptTemplates(limit: 100) { id name }
+  llmDatasets(limit: 100) { id name }
+  llmContractPriceSheets { id name status }
+  llmROICalibrations { id }
 }
 """
 
-DELETE_BINDING_MUTATION = """
-mutation DeleteBinding($id: ID!) {
-  deleteLLMGatewayPolicyBinding(id: $id)
-}
-"""
+def mutate(document: str, item: dict, variables=None):
+    graphql(document, variables or {"id": item["id"]})
 
-DELETE_POLICY_MUTATION = """
-mutation DeletePolicy($id: ID!) {
-  deleteLLMGatewayPolicy(id: $id)
-}
-"""
 
-DELETE_TOOL_SERVER_MUTATION = """
-mutation DeleteToolServer($id: ID!) {
-  deleteLLMGatewayToolServer(id: $id)
-}
-"""
-
-REVOKE_KEY_MUTATION = """
-mutation RevokeKey($id: ID!) {
-  revokeLLMGatewayKey(id: $id)
-}
-"""
-
-REJECT_APPROVAL_MUTATION = """
-mutation RejectApproval($id: ID!, $input: LLMGatewayApprovalReviewInput!) {
-  reviewLLMGatewayApproval(id: $id, input: $input) {
-    id
-    status
-  }
-}
-"""
+STEPS = [
+    {
+        "label": "policy binding(s)",
+        "items": lambda data: data["llmGatewayControlPlane"]["bindings"],
+        "run": lambda item: mutate("mutation($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }", item),
+    },
+    {
+        "label": "policy/policies",
+        "items": lambda data: data["llmGatewayControlPlane"]["policies"],
+        "run": lambda item: mutate("mutation($id: ID!) { deleteLLMGatewayPolicy(id: $id) }", item),
+    },
+    {
+        "label": "guardrail profile(s)",
+        "items": lambda data: data["llmGuardrailProfiles"],
+        "run": lambda item: mutate("mutation($id: ID!) { deleteLLMGuardrailProfile(id: $id) }", item),
+    },
+    {
+        "label": "tool server(s)",
+        "items": lambda data: data["llmGatewayControlPlane"]["toolServers"],
+        "run": lambda item: mutate("mutation($id: ID!) { deleteLLMGatewayToolServer(id: $id) }", item),
+    },
+    {
+        "label": "active virtual key(s)",
+        "verb": "Revoked",
+        "items": lambda data: [item for item in data["llmGatewayControlPlane"]["keys"] if item.get("status") != "revoked"],
+        "run": lambda item: mutate("mutation($id: ID!) { revokeLLMGatewayKey(id: $id) }", item),
+    },
+    {
+        "label": "active provider credential(s)",
+        "verb": "Revoked",
+        "items": lambda data: [item for item in data["llmGatewayControlPlane"]["credentials"] if item.get("status") != "revoked"],
+        "run": lambda item: mutate("mutation($id: ID!) { revokeLLMProviderCredential(id: $id) }", item),
+    },
+    {
+        "label": "pending approval request(s)",
+        "verb": "Rejected",
+        "items": lambda data: data["llmGatewayApprovals"],
+        "run": lambda item: mutate(
+            """mutation($id: ID!, $input: LLMGatewayApprovalReviewInput!) {
+              reviewLLMGatewayApproval(id: $id, input: $input) { id }
+            }""",
+            item,
+            {"id": item["id"], "input": {"decision": "reject", "reason": "Automated cleanup"}},
+        ),
+    },
+    {
+        "label": "prompt template(s)",
+        "verb": "Archived",
+        "items": lambda data: data["llmPromptTemplates"],
+        "run": lambda item: mutate("mutation($id: ID!) { archiveLLMPromptTemplate(id: $id) }", item),
+    },
+    {
+        "label": "eval dataset(s)",
+        "items": lambda data: data["llmDatasets"],
+        "run": lambda item: mutate("mutation($id: ID!) { deleteLLMDataset(id: $id) }", item),
+    },
+    {
+        "label": "active price sheet(s)",
+        "verb": "Archived",
+        "items": lambda data: [item for item in data["llmContractPriceSheets"] if item.get("status") != "archived"],
+        "run": lambda item: mutate("mutation($id: ID!) { archivePriceSheet(id: $id) { id } }", item),
+    },
+    {
+        "label": "ROI calibration(s)",
+        "items": lambda data: data["llmROICalibrations"],
+        "run": lambda item: mutate("mutation($id: ID!) { deleteROICalibration(id: $id) }", item),
+    },
+]
 
 
 def main():
@@ -80,8 +124,10 @@ def main():
     print("  WARNING: AI Gateway Account Resource Cleanup")
     print("=" * 80)
     print("  This script permanently removes ALL AI gateway policies, policy bindings,")
-    print("  registered tool servers, and pending approvals, and revokes ALL active")
-    print("  virtual keys in the account associated with the configured CLOPTIMA_AI_ADMIN_KEY.")
+    print("  guardrail profiles, tool servers, eval datasets, and ROI calibrations;")
+    print("  archives ALL prompt templates and price sheets; revokes ALL virtual keys")
+    print("  and provider credentials; and rejects ALL pending approvals in the account")
+    print("  associated with the configured CLOPTIMA_AI_ADMIN_KEY.")
     print()
     print(f"  Target Gateway: {config.BASE_URL}")
     print()
@@ -100,86 +146,47 @@ def main():
             sys.exit(0)
         print()
 
-    print("Fetching existing gateway resources...")
-    data = graphql(CONTROL_PLANE_QUERY, {})
-    control_plane = data.get("llmGatewayControlPlane") or {}
-    bindings = control_plane.get("bindings") or []
-    policies = control_plane.get("policies") or []
-    keys = control_plane.get("keys") or []
-    tool_servers = control_plane.get("toolServers") or []
-    approvals = data.get("llmGatewayApprovals") or []
+    cleaned_any = False
+    previous_fingerprint = None
+    while True:
+        print("Checking for remaining gateway resources..." if cleaned_any else "Fetching existing gateway resources...")
+        inventory = graphql(INVENTORY_QUERY, {})
+        plan = [{**step, "found": step["items"](inventory)} for step in STEPS]
+        remaining = sum(len(step["found"]) for step in plan)
+        if remaining == 0:
+            print("\nCleanup completed successfully." if cleaned_any else "Account is already clean. No resources to delete.")
+            return
 
-    active_keys = [k for k in keys if k.get("status") != "revoked"]
+        fingerprint = "|".join(sorted(
+            f"{step['label']}:{item['id']}"
+            for step in plan
+            for item in step["found"]
+        ))
+        if fingerprint == previous_fingerprint:
+            raise RuntimeError("cleanup made no progress; one or more resources remain")
+        previous_fingerprint = fingerprint
 
-    print("Found:")
-    print(f"  - {len(bindings)} policy binding(s)")
-    print(f"  - {len(policies)} policy/policies")
-    print(f"  - {len(tool_servers)} registered tool server(s)")
-    print(f"  - {len(active_keys)} active virtual key(s) ({len(keys)} total)")
-    print(f"  - {len(approvals)} pending approval request(s)")
-    print()
+        print("Found:")
+        for step in plan:
+            print(f"  - {len(step['found'])} {step['label']}")
+        print()
 
-    if not bindings and not policies and not tool_servers and not active_keys and not approvals:
-        print("Account is already clean. No resources to delete.")
-        return
+        failures = 0
+        for step in plan:
+            done = 0
+            for item in step["found"]:
+                try:
+                    step["run"](item)
+                    done += 1
+                except Exception as err:
+                    failures += 1
+                    item_name = item.get("name") or item.get("displayName") or item["id"]
+                    print(f"  Failed on {step['label']} {item_name}: {err}")
+            print(f"✓ {step.get('verb', 'Deleted')} {done}/{len(step['found'])} {step['label']}")
 
-    # 1. Delete bindings first
-    deleted_bindings = 0
-    for binding in bindings:
-        try:
-            graphql(DELETE_BINDING_MUTATION, {"id": binding["id"]})
-            deleted_bindings += 1
-        except Exception as err:
-            print(f"  Failed to delete binding {binding['id']}: {err}")
-    print(f"✓ Deleted {deleted_bindings}/{len(bindings)} policy binding(s)")
-
-    # 2. Delete policies
-    deleted_policies = 0
-    for policy in policies:
-        try:
-            graphql(DELETE_POLICY_MUTATION, {"id": policy["id"]})
-            deleted_policies += 1
-        except Exception as err:
-            print(f"  Failed to delete policy {policy.get('name')} ({policy['id']}): {err}")
-    print(f"✓ Deleted {deleted_policies}/{len(policies)} policy/policies")
-
-    # 3. Delete tool servers
-    deleted_servers = 0
-    for server in tool_servers:
-        try:
-            graphql(DELETE_TOOL_SERVER_MUTATION, {"id": server["id"]})
-            deleted_servers += 1
-        except Exception as err:
-            print(f"  Failed to delete tool server {server.get('name')} ({server['id']}): {err}")
-    print(f"✓ Deleted {deleted_servers}/{len(tool_servers)} tool server(s)")
-
-    # 4. Revoke active keys
-    revoked_keys = 0
-    for key in active_keys:
-        try:
-            graphql(REVOKE_KEY_MUTATION, {"id": key["id"]})
-            revoked_keys += 1
-        except Exception as err:
-            print(f"  Failed to revoke virtual key {key.get('name') or key['id']}: {err}")
-    print(f"✓ Revoked {revoked_keys}/{len(active_keys)} active virtual key(s)")
-
-    # 5. Reject pending approvals
-    rejected_approvals = 0
-    for approval in approvals:
-        try:
-            graphql(
-                REJECT_APPROVAL_MUTATION,
-                {
-                    "id": approval["id"],
-                    "input": {"decision": "reject", "reason": "Automated cleanup"},
-                },
-            )
-            rejected_approvals += 1
-        except Exception as err:
-            print(f"  Failed to reject approval {approval['id']}: {err}")
-    print(f"✓ Rejected {rejected_approvals}/{len(approvals)} pending approval request(s)")
-
-    print("\nCleanup completed successfully.")
+        if failures:
+            raise RuntimeError(f"{failures} resource(s) could not be removed")
+        cleaned_any = True
 
 
 if __name__ == "__main__":

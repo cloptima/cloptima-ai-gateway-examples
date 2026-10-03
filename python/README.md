@@ -29,7 +29,7 @@ Run any of these from the `python/` directory:
 | `python -m examples.token_limit` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `python -m examples.budget_limit` | A small daily spend cap admitting several calls, then denying the rest. |
 | `python -m examples.agentic_runaway` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
-| `python -m examples.pii_guardrail` | A model generates fake PII live, then a guardrail-enforced key blocks it. |
+| `python -m examples.pii_guardrail` | A profile custom rule blocks a fictional SSN format before model egress. |
 | `python -m examples.exact_semantic_cache` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
 | `python -m examples.conversation_prompt_caching` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `python -m examples.provider_deny` | A non-Vertex model request blocked by a Vertex-only policy. |
@@ -39,13 +39,13 @@ Run any of these from the `python/` directory:
 | `python -m examples.contract_pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
 | `python -m examples.semantic_cache_enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
 | `python -m examples.approval_workflow` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
-| `python -m examples.guardrail_detector_categories` | Baseline guardrail categories (prompt injection, jailbreak, toxicity) plus the Enterprise-gated custom detector + third-party provider integration. |
-| `python -m examples.guardrail_cost_governance` | A per-request guardrail cost cap tripping the cost-exceeded downgrade-to-lightweight action. |
+| `python -m examples.guardrail_detector_categories` | Creates isolated policy-bound profiles and exercises Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails (requires available managed credits). |
+| `python -m examples.guardrail_cost_governance` | Sets a per-request scan cost cap in a provider-backed guardrail profile (requires available managed credits). |
 | `python -m examples.adaptive_routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `python -m examples.prompt_release_workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
-| `python -m examples.mcp_tool_governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `python -m examples.mcp_tool_governance` | MCP server registration, approval rules, tool-definition review, and blocked server/tool checks. |
 | `python -m examples.session_trace_audit` | Tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification. |
-| `python -m examples.cleanup` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
+| `python -m examples.cleanup` | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, datasets, and ROI calibrations; archive prompt templates and price sheets; revoke keys and credentials; reject pending approvals. |
 
 Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - change the constant near the top of any script and re-run it.
 
@@ -64,7 +64,7 @@ python -m examples.cleanup --force
 ```
 
 > [!WARNING]
-> **Account-Wide Cleanup**: This script permanently removes **all** AI gateway policies, policy bindings, registered MCP tool servers, and pending approval requests, and revokes **all** active virtual keys in the current account. Run only in sandbox or test accounts, never against production environments.
+> **Account-Wide Cleanup**: This script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, eval datasets, and ROI calibrations; archives **all** prompt templates and price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the current account. Run only in sandbox or test accounts, never against production environments.
 
 ## How the gateway calls work
 

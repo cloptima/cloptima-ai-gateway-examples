@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# Two-step scenario, deliberately not a hardcoded "here's some fake PII"
-# string: a hardcoded test string invites the fair objection "of course your
-# detector matches its own fixture." Instead:
-#   1. Ask the model itself, through an unguarded key, to invent a short
-#      fictional support ticket containing fake PII. Nobody wrote this text;
-#      the model generates it live, moments before step 2.
-#   2. Feed that freshly-generated text through a second key bound to a
-#      PII/secret guardrail policy. The guardrail has to detect content it
-#      has never seen before.
+# Use a profile custom rule to block a fictional SSN format.
 # Run standalone: ./pii-guardrail.sh
 set -euo pipefail
 
@@ -18,50 +10,22 @@ load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 SUFFIX="$(run_suffix)"
-GENERATOR_APP_ID="pii-guardrail-generator-$SUFFIX"
-GUARDED_APP_ID="pii-guardrail-$SUFFIX"
-
-# 1. Cloptima setup - the policy, key, and binding are the whole contract.
-echo "Creating an unguarded policy (to generate the fixture) and a guardrail-enforced policy..."
-GENERATOR_POLICY=$(create_policy "$(jq -n --arg name "pii-guardrail-generator-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model]}')")
-GUARDED_POLICY=$(create_policy "$(jq -n --arg name "pii-guardrail-$SUFFIX" --arg model "$MODEL_DEFAULT" \
-  '{name: $name, mode: "enforce", budgetMode: "hard_fast", allowedProviders: ["vertex_ai"], allowedModels: [$model],
-    guardrailDetectorsEnabled: ["pii", "secret"], guardrailOutputAction: "redact"}')")
-
-GENERATOR_KEY=$(create_virtual_key "$(jq -n --arg name "vk-pii-generator-$SUFFIX" --arg appId "$GENERATOR_APP_ID" \
+APP_ID="pii-guardrail-$SUFFIX"
+PROFILE=$(create_guardrail_profile "$(jq -n --arg name "pii-guardrail-$SUFFIX" \
+  '{name: $name, description: "Block credentials and configured personal-data formats", definition: {
+    input: {action: "block", detectors: {secret: {}}, custom_rules: [{id: "us_ssn", match: {regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"}}]},
+    output: {action: "observe", detectors: {secret: {}}}}}')")
+PROFILE_ID=$(echo "$PROFILE" | jq -r '.id')
+POLICY=$(create_policy "$(jq -n --arg name "pii-guardrail-$SUFFIX" --arg model "$MODEL_DEFAULT" --arg profileId "$PROFILE_ID" \
+  '{name: $name, mode: "enforce", budgetMode: "hard_fast", failMode: "fail_closed", allowedProviders: ["vertex_ai"], allowedModels: [$model], guardrailProfileId: $profileId}')")
+POLICY_ID=$(echo "$POLICY" | jq -r '.id')
+KEY=$(create_virtual_key "$(jq -n --arg name "vk-pii-guardrail-$SUFFIX" --arg appId "$APP_ID" \
   '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-GUARDED_KEY=$(create_virtual_key "$(jq -n --arg name "vk-pii-guardrail-$SUFFIX" --arg appId "$GUARDED_APP_ID" \
-  '{name: $name, teamId: "Platform AI", appId: $appId, environment: "dev"}')")
-create_binding "$(jq -n --arg policyId "$(echo "$GENERATOR_POLICY" | jq -r '.id')" --arg appId "$GENERATOR_APP_ID" \
+create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg appId "$APP_ID" \
   '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-create_binding "$(jq -n --arg policyId "$(echo "$GUARDED_POLICY" | jq -r '.id')" --arg appId "$GUARDED_APP_ID" \
-  '{policyId: $policyId, teamId: "Platform AI", appId: $appId, environment: "dev", priority: 10, acknowledgeOverlap: true}')" >/dev/null
-echo "Minted both keys, bound. Generating a fictional PII-bearing ticket live..."
-echo ""
 
-# 2. Your application code.
-call_chat "$(echo "$GENERATOR_KEY" | jq -r '.accessToken')" "$MODEL_DEFAULT" \
-  "Generate a short, entirely fictional customer support ticket transcript for a QA test. Include a clearly fake SSN in XXX-XX-XXXX format, a fake 16-digit credit card number, a fake email address, and a fake phone number - all obviously placeholder values, never real. Output only the ticket text." \
-  "generate-fixture"
-GENERATED_TICKET="$(jq -r '.choices[0].message.content // empty' "$RESP_BODY_FILE")"
-confirm_allowed "unguarded generator key"
-echo "Generated ticket (fed into the guardrail-enforced call below):"
-echo "  ${GENERATED_TICKET:0:300}..."
-echo ""
-
-call_chat "$(echo "$GUARDED_KEY" | jq -r '.accessToken')" "$MODEL_DEFAULT" \
-  "A customer submitted this support ticket. Draft a one-sentence acknowledgement reply.
-
-$GENERATED_TICKET" \
-  "pii-guardrail-probe"
-jq '.' "$RESP_BODY_FILE"
-
-# 3. What the gateway did. The unguarded key must have produced real ticket
-# text, and the guarded key must refuse to forward it.
-confirm_blocked "guardrailDetectorsEnabled=[pii, secret]" 403
-
-echo ""
-echo "Confirmed: blocked before provider egress ($LAST_HTTP_CODE) - prompt-side PII is denied, not silently"
-echo "admitted. guardrailOutputAction: redact applies to generated output, not an incoming sensitive prompt."
-echo "Evidence: Audit tab ($CONSOLE_AUDIT) - the block record names the pii/secret detector that fired; Policies tab ($CONSOLE_POLICIES) shows the guardrailDetectorsEnabled config."
+call_chat "$(echo "$KEY" | jq -r '.accessToken')" "$MODEL_DEFAULT" \
+  "This fictional QA record contains SSN 123-45-6789. Summarize it." "pii-format-rule-probe"
+confirm_blocked "profile custom rule for a US SSN" 403
+echo "Confirmed: the profile rule blocked the matching input before model egress."
+echo "Profile: $PROFILE_ID; policy: $POLICY_ID; review them in $CONSOLE_POLICIES and $CONSOLE_AUDIT"

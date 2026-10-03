@@ -29,6 +29,16 @@ export async function createPolicy(input) {
   return data.createLLMGatewayPolicy;
 }
 
+export async function createGuardrailProfile(input) {
+  const data = await graphql(
+    `mutation CreateGuardrailProfile($input: LLMGuardrailProfileInput!) {
+      createLLMGuardrailProfile(input: $input) { id name publishedVersion { version } }
+    }`,
+    { input },
+  );
+  return data.createLLMGuardrailProfile;
+}
+
 export async function createVirtualKey(input) {
   const data = await graphql(
     `mutation CreateKey($input: CreateLLMGatewayKeyInput!) {
@@ -116,4 +126,3 @@ export async function getLlmAgentSessionRecords({ sessionId, window } = {}) {
   );
   return data.llmAgentSessionRecords;
 }
-

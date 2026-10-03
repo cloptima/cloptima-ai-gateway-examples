@@ -1,34 +1,15 @@
-"""MCP / tool-server governance: register a tool server, allow it (and only
-it) on a policy, then exercise the OpenAI Responses API's remote-MCP-tool
-path through the managed proxy.
+"""MCP tool governance: registration, approval, allowed tools, and definition review.
 
-A newly registered tool server is always 'disabled', even if the request
-asks for status: 'active' - registration overrides it and auto-queues an
-mcp_tool_server_registration approval in the same generic
-governance queue as semantic_cache_enforce.py's auto-queued
-semantic_cache_enforce entry. Reviewing that approval is the same
-second-identity step this repo never scripts (see approval_workflow.py), so
-both calls below are expected to be blocked by tool_server_disabled - this
-example isn't demonstrating an allowed call, it's demonstrating the
-governance gate and that require_approval: 'never' is enforced as its own,
-separate rule on top of it: the 'never' call's violations list carries an
-additional tool_server_auto_approval_disabled entry the 'always' call
-doesn't get, proving that rule holds independently of (and would still apply
-once) the tool server is reviewed and made active.
+The first registration waits for review. A qualifying admin then creates an
+immediately active server to demonstrate tool-definition review. The final
+checks use provider-called MCP tools, whose access is checked before inference.
 
-At the end, a second tool server is registered with applyImmediately: true
-to show the alternative: since this key already qualifies to review this
-itself, that one activates right away instead of starting 'disabled'.
-
-Uses raw requests rather than the openai SDK for these two calls: the SDK's
-APIStatusError only surfaces the JSON body, and this example needs to
-inspect the sibling `reason`/`violations` fields the gateway actually
-returns alongside `error`.
 Run standalone from python/:
     python -m examples.mcp_tool_governance
 """
 
 import json
+import time
 
 import requests
 
@@ -38,7 +19,7 @@ from lib.gateway_admin import create_binding, create_policy, create_virtual_key,
 from lib.models import MODEL_DEFAULT
 
 
-def call_responses_api(access_token: str, require_approval: str, server_label: str) -> dict:
+def call_responses_api(access_token: str, require_approval: str, server_label: str, allowed_tools=None) -> dict:
     response = requests.post(
         f"{config.BASE_URL}/v1/ai/responses",
         headers={
@@ -49,13 +30,54 @@ def call_responses_api(access_token: str, require_approval: str, server_label: s
         json={
             "model": MODEL_DEFAULT,
             "input": f"Test call with require_approval: {require_approval}.",
-            "tools": [{"type": "mcp", "server_label": server_label, "allowed_tools": ["search"], "require_approval": require_approval}],
+            "tools": [{"type": "mcp", "server_label": server_label, "allowed_tools": allowed_tools or ["search"], "require_approval": require_approval}],
         },
         timeout=30,
     )
     body = response.json()
     outcome = "allowed" if response.status_code == 200 else ("blocked" if 400 <= response.status_code < 500 else "error")
     return {"outcome": outcome, "status": response.status_code, "body": body}
+
+
+def call_chat_completions(access_token: str, tool: dict, prompt: str) -> dict:
+    response = requests.post(
+        f"{config.BASE_URL}/v1/ai/chat/completions",
+        headers={"content-type": "application/json", "user-agent": config.USER_AGENT, "authorization": f"Bearer {access_token}"},
+        json={"model": MODEL_DEFAULT, "messages": [{"role": "user", "content": prompt}], "tools": [tool]},
+        timeout=30,
+    )
+    return {"status": response.status_code, "body": response.json()}
+
+
+def query_tool_definitions(server_id: str) -> dict:
+    data = graphql(
+        """query GetToolDefs($serverId: ID) {
+          llmGatewayToolDefinitions(serverId: $serverId) {
+            definitions { toolName definitionSha256 status }
+          }
+        }""",
+        {"serverId": server_id},
+    )
+    return data["llmGatewayToolDefinitions"]
+
+
+def wait_for_tool_definition(server_id: str, predicate, timeout_seconds: int = 15) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        result = query_tool_definitions(server_id)
+        if predicate(result) or time.monotonic() >= deadline:
+            return result
+        time.sleep(1)
+
+
+def review_tool_definition(server_id: str, tool_name: str, definition_sha256: str) -> dict:
+    data = graphql(
+        """mutation ReviewToolDef($input: LLMGatewayToolDefinitionReviewInput!) {
+          reviewLLMGatewayToolDefinition(input: $input) { status }
+        }""",
+        {"input": {"serverId": server_id, "toolName": tool_name, "definitionSha256": definition_sha256, "decision": "approve"}},
+    )
+    return data["reviewLLMGatewayToolDefinition"]
 
 
 def main():
@@ -85,7 +107,7 @@ def main():
     if auto_queued:
         print(f"  pending: {json.dumps(auto_queued)}")
         print(
-            "  This is the one step this script does NOT do: reviewing it requires a second privileged identity in the "
+            "  This script leaves the approval pending. An eligible owner or admin can review it in the "
             f"console's Audit tab ({config.CONSOLE['audit']}). Until reviewed, this tool server stays 'disabled' and any call "
             "through it is blocked."
         )
@@ -144,36 +166,83 @@ def main():
         True,
         "tool_server_auto_approval_disabled should apply to 'never' only",
     )
-    print(
-        "\nConfirmed: both calls are blocked (403) because the tool server above is still 'disabled' pending review - "
-        "'always' is blocked by tool_server_disabled alone. 'never' carries that SAME violation plus an additional "
-        "tool_server_auto_approval_disabled entry the 'always' call does not get - proving the never-auto-approve "
-        "rule is enforced as its own, independent check that would still apply even after this tool server is "
-        "reviewed and made active."
-    )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - filter by app \"{app_id}\" for both records and the pending tool-server-registration approval; Policies tab ({config.CONSOLE['policies']}) shows the tool server registration and allowedToolServers config.")
+    print("Confirmed: pending servers are blocked; require_approval: 'never' adds its own violation.")
 
-    print("\nRegistering a second tool server, this time with applyImmediately: true...")
+    # 2. Active server and definition review
+    print("\nRegistering an active tool server with applyImmediately: true...")
+    active_server_label = f"example-mcp-active-{suffix}"
     tool_server_2_data = graphql(
         """mutation CreateToolServer($input: LLMGatewayToolServerInput!) {
           createLLMGatewayToolServer(input: $input) { id name status }
         }""",
         {"input": {
-            "name": f"example-mcp-server-immediate-{suffix}",
+            "name": active_server_label,
             "serverType": "mcp",
-            "serverUrl": "https://example.com/mcp",
+            "serverUrl": "https://mcp.github.example/v1",
             "status": "active",
-            "allowedToolNames": ["search", "lookup"],
+            "allowedToolNames": ["create_issue", "list_issues"],
             "applyImmediately": True,
         }},
     )
     tool_server_2 = tool_server_2_data["createLLMGatewayToolServer"]
     print(f"  tool server {tool_server_2['id']} - status: {tool_server_2['status']}")
     confirm_equals(tool_server_2.get("status"), "active", "applyImmediately: true should register the tool server as 'active'")
-    print(
-        "Confirmed: status 'active' right away - applyImmediately: true meant this registration was approved and "
-        "activated in this same call, with no separate review step and no tool_server_disabled block."
+    print("\nCreating a policy for the active server...")
+    active_policy = create_policy({
+        "name": f"mcp-active-policy-{suffix}", "mode": "enforce", "budgetMode": "hard_fast",
+        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
+        "allowedToolServers": [active_server_label],
+    })
+    active_app_id = f"{app_id}-active"
+    active_key = create_virtual_key({"name": f"vk-mcp-active-{suffix}", "teamId": "Platform AI", "appId": active_app_id, "environment": "dev"})
+    create_binding({"policyId": active_policy["id"], "teamId": "Platform AI", "appId": active_app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
+
+    tool_v1 = {"type": "function", "function": {
+        "name": "create_issue", "description": "Create a new issue on GitHub repository",
+        "parameters": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]},
+        "mcp_server": active_server_label,
+    }}
+    first_call = call_chat_completions(active_key["accessToken"], tool_v1, "Please create an issue titled Bug in login")
+    confirm_equals(first_call["status"], 200, "First tool-definition request should succeed")
+    definitions = wait_for_tool_definition(
+        tool_server_2["id"], lambda result: any(d["toolName"] == "create_issue" and d["status"] == "approved" for d in result["definitions"]),
     )
+    approved_v1 = next((d for d in definitions["definitions"] if d["toolName"] == "create_issue" and d["status"] == "approved"), None)
+    confirm_equals(bool(approved_v1), True, "First definition should be registered as the approved baseline")
+    print("Confirmed: first tool definition registered as the approved baseline.")
+
+    tool_v2 = {"type": "function", "function": {
+        "name": "create_issue", "description": "Create a new issue on GitHub repository with priority tags",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string"}, "priority": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+        }, "required": ["title", "priority"]},
+        "mcp_server": active_server_label,
+    }}
+    second_call = call_chat_completions(active_key["accessToken"], tool_v2, "Create urgent issue with priority high")
+    confirm_equals(second_call["status"], 200, "Changed tool-definition request should succeed")
+    definitions = wait_for_tool_definition(
+        tool_server_2["id"], lambda result: any(d["toolName"] == "create_issue" and d["status"] == "pending" for d in result["definitions"]),
+    )
+    pending_v2 = next((d for d in definitions["definitions"] if d["toolName"] == "create_issue" and d["status"] == "pending"), None)
+    confirm_equals(bool(pending_v2), True, "Changed definition should await review")
+    print("Confirmed: changed definition recorded as pending review.")
+
+    reviewed = review_tool_definition(tool_server_2["id"], "create_issue", pending_v2["definitionSha256"])
+    confirm_equals(reviewed["status"], "approved", "Reviewed definition should be approved")
+    definitions = query_tool_definitions(tool_server_2["id"])["definitions"]
+    confirm_equals(next((d["status"] for d in definitions if d["definitionSha256"] == approved_v1["definitionSha256"]), None), "superseded", "Prior definition should be superseded")
+    print("Confirmed: reviewed definition approved and prior version superseded.")
+
+    # 3. Provider-called MCP checks
+    rogue = call_responses_api(active_key["accessToken"], "always", "unregistered-server", ["create_issue"])
+    confirm_blocked(rogue, "unregistered MCP server", status=403)
+    confirm_equals("tool_server_unknown" in rogue["body"].get("violations", []), True, "Unknown-server violation")
+
+    disallowed = call_responses_api(active_key["accessToken"], "always", active_server_label, ["drop_database"])
+    confirm_blocked(disallowed, "disallowed MCP tool", status=403)
+    confirm_equals("tool_server_tool_not_allowed" in disallowed["body"].get("violations", []), True, "Disallowed-tool violation")
+    print("Confirmed: unknown servers and disallowed MCP tools are blocked before inference.")
+    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}); Policies tab ({config.CONSOLE['policies']}).")
 
 
 if __name__ == "__main__":

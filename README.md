@@ -25,7 +25,9 @@ Every example is independent - it creates whatever policy, virtual key, and bind
 
 ## Start here
 
-You need one thing: an `ai:admin` management key. That key can create everything else itself (policies, bindings, virtual keys, provider credentials) - nothing is pre-provisioned for you, and the gateway URL is already built into the example code, so you don't need to know or configure it.
+Start with an `ai:admin` management key. That key can create the policies, bindings, virtual keys, and provider credentials used by the examples, and the gateway URL is already built into the example code.
+
+The two managed-provider guardrail examples also require an available Cloptima managed-credit balance because their Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails scans are billable.
 
 If you don't have a key, you can generate one in the Cloptima Console under Settings > API Keys.
 
@@ -38,11 +40,11 @@ These validate baseline proxying, multi-model routing, cost limits, and real-tim
 * **`quickstart-openai` (or `quickstart-anthropic`)**: Proves the gateway proxying works.
 * **`multi-model`**: Compares cost/latency across model variants under a single policy.
 * **`budget-limit`**: Verifies real-time budget depletion and enforcement.
-* **`pii-guardrail`**: Verifies dynamic PII redacting and blocking.
+* **`pii-guardrail`**: Verifies a profile custom rule blocks a configured personal-data format.
 * **`byok`**: Routes traffic securely via bring-your-own-key credentials.
 
 ### Phase 2: Advanced Governance & Queues (Critical Gates)
-These validate the platform's multi-identity approval workflows, cache enforcement gates, tool safety registries, and prompt quality thresholds.
+These validate the platform's approval workflows, cache enforcement gates, tool safety registries, and prompt quality thresholds.
 * **`approval-workflow`**: Proves manual policy modifications sit pending in the governance queue until approved.
 * **`semantic-cache-enforce`**: Demonstrates the semantic cache enforcement approval lifecycle.
 * **`mcp-tool-governance`**: Verifies that new MCP tool servers default to `disabled` and require security review before they can be called.
@@ -83,7 +85,7 @@ Each directory has the same set of independent example scripts:
 | `token-limit` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `budget-limit` | A small daily spend cap admitting several calls, then denying the rest. |
 | `agentic-runaway` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
-| `pii-guardrail` | A model generates fake PII live, then a guardrail-enforced key blocks it - not a hardcoded test string. |
+| `pii-guardrail` | A profile custom rule blocks a fictional SSN format before model egress. |
 | `exact-semantic-cache` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
 | `conversation-prompt-caching` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `provider-deny` | A non-Vertex model request blocked by a Vertex-only policy. |
@@ -93,13 +95,13 @@ Each directory has the same set of independent example scripts:
 | `contract-pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
 | `semantic-cache-enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
 | `approval-workflow` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
-| `guardrail-detector-categories` | Baseline guardrail categories (prompt injection, jailbreak, toxicity) plus the Enterprise-gated custom detector + third-party provider integration. |
-| `guardrail-cost-governance` | A per-request guardrail cost cap tripping the cost-exceeded downgrade-to-lightweight action. |
+| `guardrail-detector-categories` | Creates isolated policy-bound profiles and exercises Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails (requires available managed credits). |
+| `guardrail-cost-governance` | Sets a per-request scan cost cap in a provider-backed guardrail profile (requires available managed credits). |
 | `adaptive-routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `prompt-release-workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
-| `mcp-tool-governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `mcp-tool-governance` | MCP server registration, approval rules, tool-definition review, and blocked server/tool checks. |
 | `session-trace-audit` | Tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification. |
-| `cleanup` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
+| `cleanup` | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, datasets, and ROI calibrations; archive prompt templates and price sheets; revoke keys and credentials; reject pending approvals. |
 
 See each directory's own README for exact run commands. Every illustrative policy limit (rate, token, budget, loop-iteration caps) is a realistic starting point printed by the script itself, not a fixed platform requirement - change the constant near the top of any script and re-run it to see the behavior move. Note: Rate limits are enforced per calendar minute window (e.g., 10:00:00-10:00:59 UTC), not a rolling 60-second window.
 
@@ -116,7 +118,7 @@ Each language directory includes a `cleanup` utility to reset your account's gat
 You can run this cleanup script before starting the validation tour to ensure a clean state, or after completing your evaluation run.
 
 > [!WARNING]
-> **Account-Wide Deletion Warning**: The cleanup script blindly and permanently removes **all** AI gateway policies, policy bindings, registered MCP tool servers, and pending approval requests, and revokes **all** active virtual keys in the authenticated account.
+> **Account-Wide Deletion Warning**: The cleanup script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, eval datasets, and ROI calibrations; archives **all** prompt templates and price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the authenticated account.
 >
 > Only run cleanup in dedicated sandbox, evaluation, or demo accounts. **Never** run this script in an account containing production traffic, live API keys, or persistent business policies.
 

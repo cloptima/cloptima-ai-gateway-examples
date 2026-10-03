@@ -1,21 +1,12 @@
-"""Two-step scenario, deliberately not a hardcoded "here's some fake PII"
-string: a hardcoded test string invites the fair objection "of course your
-detector matches its own fixture." Instead:
-  1. Ask the model itself, through an unguarded key, to invent a short
-     fictional support ticket containing fake PII. Nobody wrote this text;
-     the model generates it live, moments before step 2.
-  2. Feed that freshly-generated text through a second key bound to a
-     PII/secret guardrail policy. The guardrail has to detect content it
-     has never seen before.
-Run standalone from python/:
+"""Use a profile custom rule to block a fictional SSN format.
+
+Run standalone from python/ with:
     python -m examples.pii_guardrail
 """
 
-import json
-
 from lib import config
-from lib.confirm import confirm_allowed, confirm_blocked, confirm_equals
-from lib.gateway_admin import create_binding, create_policy, create_virtual_key
+from lib.confirm import confirm_blocked
+from lib.gateway_admin import create_binding, create_guardrail_profile, create_policy, create_virtual_key
 from lib.gateway_clients import openai_style_client
 from lib.call_gateway import call_openai_style
 from lib.models import MODEL_DEFAULT
@@ -23,64 +14,53 @@ from lib.models import MODEL_DEFAULT
 
 def main():
     suffix = config.run_suffix()
-    generator_app_id = f"pii-guardrail-generator-{suffix}"
-    guarded_app_id = f"pii-guardrail-{suffix}"
-
-    # 1. Cloptima setup - the policy, key, and binding are the whole contract.
-    print("Creating an unguarded policy (to generate the fixture) and a guardrail-enforced policy...")
-    generator_policy = create_policy({
-        "name": f"pii-guardrail-generator-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-    })
-    guarded_policy = create_policy({
+    app_id = f"pii-guardrail-{suffix}"
+    profile = create_guardrail_profile({
         "name": f"pii-guardrail-{suffix}",
-        "mode": "enforce", "budgetMode": "hard_fast",
-        "allowedProviders": ["vertex_ai"], "allowedModels": [MODEL_DEFAULT],
-        "guardrailDetectorsEnabled": ["pii", "secret"],
-        "guardrailOutputAction": "redact",
+        "description": "Block credentials and configured personal-data formats",
+        "definition": {
+            "input": {
+                "action": "block",
+                "detectors": {"secret": {}},
+                "custom_rules": [{"id": "us_ssn", "match": {"regex": r"\b\d{3}-\d{2}-\d{4}\b"}}],
+            },
+            "output": {"action": "observe", "detectors": {"secret": {}}},
+        },
+    })
+    policy = create_policy({
+        "name": f"pii-guardrail-{suffix}",
+        "mode": "enforce",
+        "budgetMode": "hard_fast",
+        "failMode": "fail_closed",
+        "allowedProviders": ["vertex_ai"],
+        "allowedModels": [MODEL_DEFAULT],
+        "guardrailProfileId": profile["id"],
+    })
+    key = create_virtual_key({
+        "name": f"vk-pii-guardrail-{suffix}",
+        "teamId": "Platform AI",
+        "appId": app_id,
+        "environment": "dev",
+    })
+    create_binding({
+        "policyId": policy["id"],
+        "teamId": "Platform AI",
+        "appId": app_id,
+        "environment": "dev",
+        "priority": 10,
+        "acknowledgeOverlap": True,
     })
 
-    generator_key = create_virtual_key({
-        "name": f"vk-pii-generator-{suffix}", "teamId": "Platform AI", "appId": generator_app_id, "environment": "dev",
-    })
-    guarded_key = create_virtual_key({
-        "name": f"vk-pii-guardrail-{suffix}", "teamId": "Platform AI", "appId": guarded_app_id, "environment": "dev",
-    })
-    create_binding({"policyId": generator_policy["id"], "teamId": "Platform AI", "appId": generator_app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    create_binding({"policyId": guarded_policy["id"], "teamId": "Platform AI", "appId": guarded_app_id, "environment": "dev", "priority": 10, "acknowledgeOverlap": True})
-    print("Minted both keys, bound. Generating a fictional PII-bearing ticket live...\n")
-
-    # 2. Your application code - the official OpenAI SDK, unchanged.
-    generator_client = openai_style_client(generator_key["accessToken"], config.BASE_URL)
-    generation = call_openai_style(
-        generator_client, MODEL_DEFAULT,
-        "Generate a short, entirely fictional customer support ticket transcript for a QA test. "
-        "Include a clearly fake SSN in XXX-XX-XXXX format, a fake 16-digit credit card number, a fake email "
-        "address, and a fake phone number - all obviously placeholder values, never real. Output only the ticket text.",
-        "generate-fixture",
+    result = call_openai_style(
+        openai_style_client(key["accessToken"], config.BASE_URL),
+        MODEL_DEFAULT,
+        "This fictional QA record contains SSN 123-45-6789. Summarize it.",
+        "pii-format-rule-probe",
     )
-    generated_text = generation.get("text") or ""
-    print(f"Generated ticket (fed into the guardrail-enforced call below):\n  {generated_text.replace(chr(10), chr(10) + '  ')}\n")
-
-    guarded_client = openai_style_client(guarded_key["accessToken"], config.BASE_URL)
-    guarded = call_openai_style(
-        guarded_client, MODEL_DEFAULT,
-        f"A customer submitted this support ticket. Draft a one-sentence acknowledgement reply.\n\n{generated_text}",
-        "pii-guardrail-probe",
-    )
-
-    # 3. What the gateway did. The unguarded key must have produced real ticket
-    # text, and the guarded key must refuse to forward it.
-    print(f"[{guarded['outcome']}] {json.dumps(guarded, indent=2, default=str)}")
-    confirm_allowed(generation, "unguarded generator key")
-    confirm_equals(len(generated_text.strip()) > 0, True, "unguarded generator key should return ticket text to feed the guarded call")
-    confirm_blocked(guarded, "guardrailDetectorsEnabled=[pii, secret]", status=403)
-    print(
-        f"\nConfirmed: blocked before provider egress ({guarded.get('status')}) - prompt-side PII is denied, not silently "
-        "admitted. guardrailOutputAction: redact applies to generated output, not an incoming sensitive prompt."
-    )
-    print(f"Evidence: Audit tab ({config.CONSOLE['audit']}) - the block record names the pii/secret detector that fired; Policies tab ({config.CONSOLE['policies']}) shows the guardrailDetectorsEnabled config.")
+    print(f"[{result['outcome']}] {result}")
+    confirm_blocked(result, "profile custom rule for a US SSN", status=403)
+    print("\nConfirmed: the profile rule blocked the matching input before model egress.")
+    print(f"Profile: {profile['id']}; policy: {policy['id']}; review them in {config.CONSOLE['policies']} and {config.CONSOLE['audit']}")
 
 
 if __name__ == "__main__":

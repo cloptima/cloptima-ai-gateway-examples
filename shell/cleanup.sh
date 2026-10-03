@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Automated cleanup script for Cloptima AI gateway example resources.
 #
-# WARNING: This script permanently deletes all AI gateway policies, policy
-# bindings, registered tool servers, and pending approvals, and revokes all
-# active virtual keys in the authenticated account.
+# WARNING: This script permanently deletes every AI gateway policy, policy
+# binding, guardrail profile, registered tool server, eval dataset, and ROI
+# calibration in the authenticated account. It also archives prompt templates
+# and price sheets, revokes all active virtual keys and provider credentials,
+# and rejects all pending approvals.
 #
 # Intended for sandbox, testing, or demo environments to clean up resources
 # before or after evaluating example scripts.
@@ -32,8 +34,10 @@ echo "==========================================================================
 echo "  WARNING: AI Gateway Account Resource Cleanup"
 echo "================================================================================"
 echo "  This script permanently removes ALL AI gateway policies, policy bindings,"
-echo "  registered tool servers, and pending approvals, and revokes ALL active"
-echo "  virtual keys in the account associated with the configured CLOPTIMA_AI_ADMIN_KEY."
+echo "  guardrail profiles, tool servers, eval datasets, and ROI calibrations;"
+echo "  archives ALL prompt templates and price sheets; revokes ALL virtual keys"
+echo "  and provider credentials; and rejects ALL pending approvals in the account"
+echo "  associated with the configured CLOPTIMA_AI_ADMIN_KEY."
 echo ""
 echo "  Target Gateway: $BASE_URL"
 echo ""
@@ -51,108 +55,126 @@ if [ -t 0 ] && [ "$IS_FORCE" = "false" ]; then
   echo ""
 fi
 
-echo "Fetching existing gateway resources..."
-CONTROL_PLANE_QUERY='query GetControlPlaneAndApprovals {
+INVENTORY_QUERY='query GetCleanupInventory {
   llmGatewayControlPlane {
     bindings { id }
     policies { id name }
     keys { id name status }
+    credentials { id displayName status }
     toolServers { id name }
   }
-  llmGatewayApprovals(status: "pending", limit: 100) {
-    id
-    status
-  }
+  llmGuardrailProfiles { id name }
+  llmGatewayApprovals(status: "pending", limit: 100) { id status }
+  llmPromptTemplates(limit: 100) { id name }
+  llmDatasets(limit: 100) { id name }
+  llmContractPriceSheets { id name status }
+  llmROICalibrations { id }
 }'
 
-DATA=$(graphql "$CONTROL_PLANE_QUERY" '{}')
-
-NUM_BINDINGS=$(echo "$DATA" | jq '(.llmGatewayControlPlane.bindings // []) | length')
-NUM_POLICIES=$(echo "$DATA" | jq '(.llmGatewayControlPlane.policies // []) | length')
-NUM_TOOL_SERVERS=$(echo "$DATA" | jq '(.llmGatewayControlPlane.toolServers // []) | length')
-NUM_TOTAL_KEYS=$(echo "$DATA" | jq '(.llmGatewayControlPlane.keys // []) | length')
-ACTIVE_KEY_IDS=$(echo "$DATA" | jq -r '(.llmGatewayControlPlane.keys // []) | map(select(.status != "revoked")) | .[].id')
-if [ -n "$ACTIVE_KEY_IDS" ]; then
-  NUM_ACTIVE_KEYS=$(echo "$ACTIVE_KEY_IDS" | wc -l | tr -d ' ')
-else
-  NUM_ACTIVE_KEYS=0
-fi
-NUM_APPROVALS=$(echo "$DATA" | jq '(.llmGatewayApprovals // []) | length')
-
-echo "Found:"
-echo "  - $NUM_BINDINGS policy binding(s)"
-echo "  - $NUM_POLICIES policy/policies"
-echo "  - $NUM_TOOL_SERVERS registered tool server(s)"
-echo "  - $NUM_ACTIVE_KEYS active virtual key(s) ($NUM_TOTAL_KEYS total)"
-echo "  - $NUM_APPROVALS pending approval request(s)"
-echo ""
-
-if [ "$NUM_BINDINGS" -eq 0 ] && [ "$NUM_POLICIES" -eq 0 ] && [ "$NUM_TOOL_SERVERS" -eq 0 ] && [ "$NUM_ACTIVE_KEYS" -eq 0 ] && [ "$NUM_APPROVALS" -eq 0 ]; then
-  echo "Account is already clean. No resources to delete."
-  exit 0
-fi
-
-# 1. Delete bindings
-DELETED_BINDINGS=0
-for id in $(echo "$DATA" | jq -r '(.llmGatewayControlPlane.bindings // [])[].id'); do
-  vars=$(jq -n --arg id "$id" '{id: $id}')
-  if graphql 'mutation DeleteBinding($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }' "$vars" >/dev/null 2>&1; then
-    DELETED_BINDINGS=$((DELETED_BINDINGS + 1))
-  else
-    echo "  Failed to delete binding $id" >&2
-  fi
-done
-echo "✓ Deleted $DELETED_BINDINGS/$NUM_BINDINGS policy binding(s)"
-
-# 2. Delete policies
-DELETED_POLICIES=0
-for id in $(echo "$DATA" | jq -r '(.llmGatewayControlPlane.policies // [])[].id'); do
-  vars=$(jq -n --arg id "$id" '{id: $id}')
-  if graphql 'mutation DeletePolicy($id: ID!) { deleteLLMGatewayPolicy(id: $id) }' "$vars" >/dev/null 2>&1; then
-    DELETED_POLICIES=$((DELETED_POLICIES + 1))
-  else
-    echo "  Failed to delete policy $id" >&2
-  fi
-done
-echo "✓ Deleted $DELETED_POLICIES/$NUM_POLICIES policy/policies"
-
-# 3. Delete tool servers
-DELETED_SERVERS=0
-for id in $(echo "$DATA" | jq -r '(.llmGatewayControlPlane.toolServers // [])[].id'); do
-  vars=$(jq -n --arg id "$id" '{id: $id}')
-  if graphql 'mutation DeleteToolServer($id: ID!) { deleteLLMGatewayToolServer(id: $id) }' "$vars" >/dev/null 2>&1; then
-    DELETED_SERVERS=$((DELETED_SERVERS + 1))
-  else
-    echo "  Failed to delete tool server $id" >&2
-  fi
-done
-echo "✓ Deleted $DELETED_SERVERS/$NUM_TOOL_SERVERS tool server(s)"
-
-# 4. Revoke active keys
-REVOKED_KEYS=0
-if [ -n "$ACTIVE_KEY_IDS" ]; then
-  for id in $ACTIVE_KEY_IDS; do
-    vars=$(jq -n --arg id "$id" '{id: $id}')
-    if graphql 'mutation RevokeKey($id: ID!) { revokeLLMGatewayKey(id: $id) }' "$vars" >/dev/null 2>&1; then
-      REVOKED_KEYS=$((REVOKED_KEYS + 1))
+run_items() {
+  local label="$1" verb="$2" filter="$3" mutation="$4" total done item id variables
+  total=$(jq "$filter | length" <<<"$DATA")
+  done=0
+  while IFS= read -r item; do
+    [ -z "$item" ] && continue
+    id=$(jq -r '.id' <<<"$item")
+    variables=$(jq -n --arg id "$id" '{id: $id}')
+    if graphql "$mutation" "$variables" >/dev/null 2>&1; then
+      done=$((done + 1))
     else
-      echo "  Failed to revoke key $id" >&2
+      BATCH_FAILURES=$((BATCH_FAILURES + 1))
+      echo "  Failed on $label $id" >&2
     fi
-  done
-fi
-echo "✓ Revoked $REVOKED_KEYS/$NUM_ACTIVE_KEYS active virtual key(s)"
+  done < <(jq -c "$filter[]" <<<"$DATA")
+  echo "✓ $verb $done/$total $label"
+}
 
-# 5. Reject pending approvals
-REJECTED_APPROVALS=0
-for id in $(echo "$DATA" | jq -r '(.llmGatewayApprovals // [])[].id'); do
-  vars=$(jq -n --arg id "$id" '{id: $id, input: {decision: "reject", reason: "Automated cleanup"}}')
-  if graphql 'mutation RejectApproval($id: ID!, $input: LLMGatewayApprovalReviewInput!) { reviewLLMGatewayApproval(id: $id, input: $input) { id status } }' "$vars" >/dev/null 2>&1; then
-    REJECTED_APPROVALS=$((REJECTED_APPROVALS + 1))
+run_approvals() {
+  local total done item id variables
+  total=$(jq '(.llmGatewayApprovals // []) | length' <<<"$DATA")
+  done=0
+  while IFS= read -r item; do
+    [ -z "$item" ] && continue
+    id=$(jq -r '.id' <<<"$item")
+    variables=$(jq -n --arg id "$id" '{id: $id, input: {decision: "reject", reason: "Automated cleanup"}}')
+    if graphql 'mutation($id: ID!, $input: LLMGatewayApprovalReviewInput!) { reviewLLMGatewayApproval(id: $id, input: $input) { id } }' "$variables" >/dev/null 2>&1; then
+      done=$((done + 1))
+    else
+      BATCH_FAILURES=$((BATCH_FAILURES + 1))
+      echo "  Failed on pending approval request(s) $id" >&2
+    fi
+  done < <(jq -c '(.llmGatewayApprovals // [])[]' <<<"$DATA")
+  echo "✓ Rejected $done/$total pending approval request(s)"
+}
+
+CLEANED_ANY=false
+PREVIOUS_FINGERPRINT=""
+while true; do
+  if [ "$CLEANED_ANY" = "true" ]; then
+    echo "Checking for remaining gateway resources..."
   else
-    echo "  Failed to reject approval $id" >&2
+    echo "Fetching existing gateway resources..."
   fi
-done
-echo "✓ Rejected $REJECTED_APPROVALS/$NUM_APPROVALS pending approval request(s)"
+  DATA=$(graphql "$INVENTORY_QUERY" '{}')
+  FINGERPRINT=$(jq -r '[
+    ((.llmGatewayControlPlane.bindings // [])[] | "binding:" + .id),
+    ((.llmGatewayControlPlane.policies // [])[] | "policy:" + .id),
+    ((.llmGuardrailProfiles // [])[] | "guardrail:" + .id),
+    ((.llmGatewayControlPlane.toolServers // [])[] | "tool-server:" + .id),
+    ((.llmGatewayControlPlane.keys // [])[] | select(.status != "revoked") | "key:" + .id),
+    ((.llmGatewayControlPlane.credentials // [])[] | select(.status != "revoked") | "credential:" + .id),
+    ((.llmGatewayApprovals // [])[] | "approval:" + .id),
+    ((.llmPromptTemplates // [])[] | "prompt:" + .id),
+    ((.llmDatasets // [])[] | "dataset:" + .id),
+    ((.llmContractPriceSheets // [])[] | select(.status != "archived") | "price-sheet:" + .id),
+    ((.llmROICalibrations // [])[] | "roi:" + .id)
+  ] | sort | join("|")' <<<"$DATA")
 
-echo ""
-echo "Cleanup completed successfully."
+  if [ -z "$FINGERPRINT" ]; then
+    if [ "$CLEANED_ANY" = "true" ]; then
+      echo ""
+      echo "Cleanup completed successfully."
+    else
+      echo "Account is already clean. No resources to delete."
+    fi
+    exit 0
+  fi
+  if [ "$FINGERPRINT" = "$PREVIOUS_FINGERPRINT" ]; then
+    echo "Cleanup failed: cleanup made no progress; one or more resources remain" >&2
+    exit 1
+  fi
+  PREVIOUS_FINGERPRINT="$FINGERPRINT"
+
+  echo "Found:"
+  echo "  - $(jq '(.llmGatewayControlPlane.bindings // []) | length' <<<"$DATA") policy binding(s)"
+  echo "  - $(jq '(.llmGatewayControlPlane.policies // []) | length' <<<"$DATA") policy/policies"
+  echo "  - $(jq '(.llmGuardrailProfiles // []) | length' <<<"$DATA") guardrail profile(s)"
+  echo "  - $(jq '(.llmGatewayControlPlane.toolServers // []) | length' <<<"$DATA") tool server(s)"
+  echo "  - $(jq '[.llmGatewayControlPlane.keys[] | select(.status != "revoked")] | length' <<<"$DATA") active virtual key(s)"
+  echo "  - $(jq '[.llmGatewayControlPlane.credentials[] | select(.status != "revoked")] | length' <<<"$DATA") active provider credential(s)"
+  echo "  - $(jq '(.llmGatewayApprovals // []) | length' <<<"$DATA") pending approval request(s)"
+  echo "  - $(jq '(.llmPromptTemplates // []) | length' <<<"$DATA") prompt template(s)"
+  echo "  - $(jq '(.llmDatasets // []) | length' <<<"$DATA") eval dataset(s)"
+  echo "  - $(jq '[.llmContractPriceSheets[] | select(.status != "archived")] | length' <<<"$DATA") active price sheet(s)"
+  echo "  - $(jq '(.llmROICalibrations // []) | length' <<<"$DATA") ROI calibration(s)"
+  echo ""
+
+  BATCH_FAILURES=0
+  run_items "policy binding(s)" "Deleted" '(.llmGatewayControlPlane.bindings // [])' 'mutation($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }'
+  run_items "policy/policies" "Deleted" '(.llmGatewayControlPlane.policies // [])' 'mutation($id: ID!) { deleteLLMGatewayPolicy(id: $id) }'
+  run_items "guardrail profile(s)" "Deleted" '(.llmGuardrailProfiles // [])' 'mutation($id: ID!) { deleteLLMGuardrailProfile(id: $id) }'
+  run_items "tool server(s)" "Deleted" '(.llmGatewayControlPlane.toolServers // [])' 'mutation($id: ID!) { deleteLLMGatewayToolServer(id: $id) }'
+  run_items "active virtual key(s)" "Revoked" '[.llmGatewayControlPlane.keys[] | select(.status != "revoked")]' 'mutation($id: ID!) { revokeLLMGatewayKey(id: $id) }'
+  run_items "active provider credential(s)" "Revoked" '[.llmGatewayControlPlane.credentials[] | select(.status != "revoked")]' 'mutation($id: ID!) { revokeLLMProviderCredential(id: $id) }'
+  run_approvals
+  run_items "prompt template(s)" "Archived" '(.llmPromptTemplates // [])' 'mutation($id: ID!) { archiveLLMPromptTemplate(id: $id) }'
+  run_items "eval dataset(s)" "Deleted" '(.llmDatasets // [])' 'mutation($id: ID!) { deleteLLMDataset(id: $id) }'
+  run_items "active price sheet(s)" "Archived" '[.llmContractPriceSheets[] | select(.status != "archived")]' 'mutation($id: ID!) { archivePriceSheet(id: $id) { id } }'
+  run_items "ROI calibration(s)" "Deleted" '(.llmROICalibrations // [])' 'mutation($id: ID!) { deleteROICalibration(id: $id) }'
+
+  if [ "$BATCH_FAILURES" -gt 0 ]; then
+    echo "Cleanup failed: $BATCH_FAILURES resource(s) could not be removed" >&2
+    exit 1
+  fi
+  CLEANED_ANY=true
+done

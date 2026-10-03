@@ -27,7 +27,7 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `./token-limit.sh` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `./budget-limit.sh` | A small daily spend cap admitting several calls, then denying the rest. |
 | `./agentic-runaway.sh` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
-| `./pii-guardrail.sh` | A model generates fake PII live, then a guardrail-enforced key blocks it. |
+| `./pii-guardrail.sh` | A profile custom rule blocks a fictional SSN format before model egress. |
 | `./exact-semantic-cache.sh` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
 | `./conversation-prompt-caching.sh` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `./provider-deny.sh` | A non-Vertex model request blocked by a Vertex-only policy. |
@@ -37,13 +37,13 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `./contract-pricing.sh` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
 | `./semantic-cache-enforce.sh` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
 | `./approval-workflow.sh` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
-| `./guardrail-detector-categories.sh` | Baseline guardrail categories (prompt injection, jailbreak, toxicity) plus the Enterprise-gated custom detector + third-party provider integration. |
-| `./guardrail-cost-governance.sh` | A per-request guardrail cost cap tripping the cost-exceeded downgrade-to-lightweight action. |
+| `./guardrail-detector-categories.sh` | Creates isolated policy-bound profiles and exercises Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails (requires available managed credits). |
+| `./guardrail-cost-governance.sh` | Sets a per-request scan cost cap in a provider-backed guardrail profile (requires available managed credits). |
 | `./adaptive-routing.sh` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `./prompt-release-workflow.sh` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
-| `./mcp-tool-governance.sh` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `./mcp-tool-governance.sh` | MCP server registration, approval rules, tool-definition review, and blocked server/tool checks. |
 | `./session-trace-audit.sh` | Tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification. |
-| `./cleanup.sh` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
+| `./cleanup.sh` | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, datasets, and ROI calibrations; archive prompt templates and price sheets; revoke keys and credentials; reject pending approvals. |
 
 Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - edit the constants near the top of any script and re-run it.
 
@@ -62,7 +62,7 @@ In automated or CI environments, pass `--force` to bypass the interactive confir
 ```
 
 > [!WARNING]
-> **Account-Wide Cleanup**: This script permanently removes **all** AI gateway policies, policy bindings, registered MCP tool servers, and pending approval requests, and revokes **all** active virtual keys in the current account. Run only in sandbox or test accounts, never against production environments.
+> **Account-Wide Cleanup**: This script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, eval datasets, and ROI calibrations; archives **all** prompt templates and price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the current account. Run only in sandbox or test accounts, never against production environments.
 
 `rate-limit.sh` in particular is timing-sensitive: limits are evaluated per fixed calendar minute (e.g., 10:00:00 to 10:00:59 UTC) rather than a rolling window. Because `curl` subprocess overhead takes time, a run can cross a minute boundary and receive a fresh quota partway through. If it doesn't trip, simply re-run it.
 

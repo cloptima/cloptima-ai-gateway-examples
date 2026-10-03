@@ -78,6 +78,15 @@ create_policy() {
     "$variables" | jq -c '.createLLMGatewayPolicy'
 }
 
+# create_guardrail_profile <profile_input_json> -> prints {id, name, publishedVersion}
+create_guardrail_profile() {
+  local input="$1" variables
+  variables=$(jq -n --argjson input "$input" '{input: $input}')
+  graphql 'mutation CreateGuardrailProfile($input: LLMGuardrailProfileInput!) {
+      createLLMGuardrailProfile(input: $input) { id name publishedVersion { version } }
+    }' "$variables" | jq -c '.createLLMGuardrailProfile'
+}
+
 # create_virtual_key <key_input_json> -> prints {id, accessToken, tokenPrefix, expiresAt}
 create_virtual_key() {
   local input="$1" variables

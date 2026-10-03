@@ -25,7 +25,7 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `npm run token-limit` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `npm run budget-limit` | A small daily spend cap admitting several calls, then denying the rest. |
 | `npm run agentic-runaway` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
-| `npm run pii-guardrail` | A model generates fake PII live, then a guardrail-enforced key blocks it. |
+| `npm run pii-guardrail` | A profile custom rule blocks a fictional SSN format before model egress. |
 | `npm run exact-semantic-cache` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
 | `npm run conversation-prompt-caching` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `npm run provider-deny` | A non-Vertex model request blocked by a Vertex-only policy. |
@@ -35,13 +35,13 @@ Short on time? See [`../README.md`](../README.md#suggested-tour-10-minutes) for 
 | `npm run contract-pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
 | `npm run semantic-cache-enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
 | `npm run approval-workflow` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
-| `npm run guardrail-detector-categories` | Baseline guardrail categories (prompt injection, jailbreak, toxicity) plus the Enterprise-gated custom detector + third-party provider integration. |
-| `npm run guardrail-cost-governance` | A per-request guardrail cost cap tripping the cost-exceeded downgrade-to-lightweight action. |
+| `npm run guardrail-detector-categories` | Creates isolated policy-bound profiles and exercises Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails (requires available managed credits). |
+| `npm run guardrail-cost-governance` | Sets a per-request scan cost cap in a provider-backed guardrail profile (requires available managed credits). |
 | `npm run adaptive-routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
 | `npm run prompt-release-workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
-| `npm run mcp-tool-governance` | A newly registered MCP tool server defaulting to 'disabled' pending review, plus the separate never-auto-approve rule. |
+| `npm run mcp-tool-governance` | MCP server registration, approval rules, tool-definition review, and blocked server/tool checks. |
 | `npm run session-trace-audit` | Tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification. |
-| `npm run cleanup` | Reset and remove all demo policies, bindings, tool servers, pending approvals, and active keys. |
+| `npm run cleanup` | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, datasets, and ROI calibrations; archive prompt templates and price sheets; revoke keys and credentials; reject pending approvals. |
 
 Each script prints illustrative policy limits it's using and says plainly that they're a starting point, not a fixed platform requirement - change the constant at the top of any script and re-run it.
 
@@ -60,7 +60,7 @@ npm run cleanup -- --force
 ```
 
 > [!WARNING]
-> **Account-Wide Cleanup**: This script permanently removes **all** AI gateway policies, policy bindings, registered MCP tool servers, and pending approval requests, and revokes **all** active virtual keys in the current account. Run only in sandbox or test accounts, never against production environments.
+> **Account-Wide Cleanup**: This script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, eval datasets, and ROI calibrations; archives **all** prompt templates and price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the current account. Run only in sandbox or test accounts, never against production environments.
 
 ## How the gateway calls work
 
