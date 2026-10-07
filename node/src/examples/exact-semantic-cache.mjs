@@ -22,6 +22,12 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// A new policy takes effect a few seconds after it is created. A response is
+// stored in the exact cache a few seconds after it is served, so an identical
+// request sent sooner is a cache miss.
+const POLICY_PROPAGATION_MS = 10000;
+const CACHE_FILL_MS = 6000;
+
 async function timedCompletion(client, prompt, label) {
   const start = Date.now();
   const response = await client.chat.completions.create({
@@ -61,6 +67,11 @@ async function main() {
     },
   });
 
+  if (access.provisioned) {
+    console.log(`Waiting ${POLICY_PROPAGATION_MS / 1000}s for the new policy to take effect...\n`);
+    await sleep(POLICY_PROPAGATION_MS);
+  }
+
   // Application code: the official SDK, pointed at the gateway with a virtual key.
   const client = openaiClient(access.virtualKey);
 
@@ -73,8 +84,8 @@ async function main() {
   console.log(`Assistant: ${initial.content}`);
   console.log(`Latency: ${initial.elapsedMs}ms | Tokens: ${initial.usage?.total_tokens}\n`);
 
-  // Allow cache write to settle in background
-  await sleep(1500);
+  // Give the exact cache time to store the first response before repeating the query.
+  await sleep(CACHE_FILL_MS);
 
   // 3. Query 2: Repeated identical query (Exact Cache Hit)
   console.log(`--- Query 2: Repeated Identical Request (Exact Cache Hit) ---`);
