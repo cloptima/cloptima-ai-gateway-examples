@@ -25,7 +25,7 @@ def main() -> None:
         policy={
             "name": "governance-approval-policy",
             "mode": "enforce",
-            "budgetMode": "hard_fast",
+            "budgetMode": "hard",
             "allowedProviders": ["vertex_ai"],
             "allowedModels": [MODELS["default"]],
             "dailyBudgetUsd": CURRENT_DAILY_BUDGET_USD,

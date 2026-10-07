@@ -21,7 +21,7 @@ echo ""
 # create it once in the Console, Terraform, or CI. Skipped when CLOPTIMA_VIRTUAL_KEY points at
 # a key whose policy already matches.
 get_access "provider-boundary-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "provider-boundary-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "provider-boundary-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
 
 # Application code: try the preferred model, fall back to an approved one if the gateway blocks it.

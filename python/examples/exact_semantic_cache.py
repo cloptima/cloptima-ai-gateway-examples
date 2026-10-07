@@ -49,7 +49,7 @@ def main() -> None:
         policy={
             "name": "knowledge-cache-policy",
             "mode": "enforce",
-            "budgetMode": "hard_fast",
+            "budgetMode": "hard",
             "allowedProviders": ["vertex_ai"],
             "allowedModels": [MODELS["default"]],
             "exactCacheEnabled": True,

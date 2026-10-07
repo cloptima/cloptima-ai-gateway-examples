@@ -43,7 +43,7 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "byok-demo" "$(jq -n --arg model "$BYOK_MODEL" '{
-  name: "byok-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "byok-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["openai"], allowedModels: [$model]}')"
 
 # Application code: the credential header routes the call through your own provider account.

@@ -33,7 +33,7 @@ SUFFIX="$(run_suffix)"
 echo "Creating baseline policy and virtual key..."
 ENVIRONMENT="production"
 provision_app "prompt-release-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "prompt-release-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "prompt-release-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model], promptRetentionMode: "full"}')"
 echo "  Policy bound, waiting for binding propagation..."
 sleep 3

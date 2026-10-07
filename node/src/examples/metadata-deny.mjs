@@ -35,7 +35,7 @@ async function main() {
     const policy = await createPolicy({
       name: `attribution-policy-${suffix}`,
       mode: 'enforce',
-      budgetMode: 'hard_fast',
+      budgetMode: 'hard',
       allowedProviders: ['vertex_ai'],
       allowedModels: [MODELS.default],
       metadata: { required_metadata_keys: ['team_id', 'app_id', 'environment'] },

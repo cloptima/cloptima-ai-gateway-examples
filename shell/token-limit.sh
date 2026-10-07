@@ -23,7 +23,7 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "token-limit-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson tokens "$MAX_OUTPUT_TOKENS" '{
-  name: "token-limit-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "token-limit-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model], maxOutputTokens: $tokens}')"
 
 # Application code: the same call with two different max_tokens values.

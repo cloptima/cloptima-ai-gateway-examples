@@ -47,7 +47,7 @@ def main() -> None:
         policy={
             "name": "agent-loop-policy",
             "mode": "enforce",
-            "budgetMode": "hard_fast",
+            "budgetMode": "hard",
             "allowedProviders": ["vertex_ai"],
             "allowedModels": [MODELS["default"]],
             "maxLoopIterations": 3,

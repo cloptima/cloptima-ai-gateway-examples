@@ -56,7 +56,7 @@ PROFILE_JSON=$(jq -n --argjson integration "$INTEGRATION" '{
 POLICY_JSON=$(jq -n --arg model "$MODEL_DEFAULT" '{
   name: "managed-guardrail-policy",
   mode: "enforce",
-  budgetMode: "hard_fast",
+  budgetMode: "hard",
   failMode: "fail_closed",
   allowedProviders: ["vertex_ai"],
   allowedModels: [$model]

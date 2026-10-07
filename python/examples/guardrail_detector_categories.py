@@ -85,7 +85,7 @@ def main() -> None:
         policy={
             "name": f"guardrail-{provider['id']}-policy",
             "mode": "enforce",
-            "budgetMode": "hard_fast",
+            "budgetMode": "hard",
             "failMode": "fail_closed",
             "allowedProviders": ["vertex_ai"],
             "allowedModels": [MODELS["default"]],

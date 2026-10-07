@@ -84,7 +84,7 @@ echo "ROI calibration seeded."
 echo "Creating a policy + key and making a few real support-automation calls..."
 TEAM_ID="Support Automation"; ENVIRONMENT="prod"
 provision_app "unit-economics-support" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "unit-economics-support-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "unit-economics-support-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
 SUPPORT_APP_ID="$APP_ID"
 
@@ -124,7 +124,7 @@ echo ""
 echo "Creating a policy + key and making a few real checkout-upsell calls..."
 TEAM_ID="Checkout Upsell"; ENVIRONMENT="prod"
 provision_app "unit-economics-upsell" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "unit-economics-upsell-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "unit-economics-upsell-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
 UPSELL_APP_ID="$APP_ID"
 

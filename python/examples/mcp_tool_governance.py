@@ -111,7 +111,7 @@ def main() -> None:
         policy={
             "name": "mcp-agent-policy",
             "mode": "enforce",
-            "budgetMode": "hard_fast",
+            "budgetMode": "hard",
             "allowedProviders": ["vertex_ai"],
             "allowedModels": [MODELS["default"]],
             "allowedToolServers": [server_label],  # the agent may only use this tool server

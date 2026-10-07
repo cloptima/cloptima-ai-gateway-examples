@@ -29,13 +29,13 @@ def main() -> None:
     # Governance setup: the policy this application runs under. Platform admins normally
     # create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
     # points at a key whose policy already matches.
-    # hard_strict reserves against estimated cost derived from max_tokens pre-flight.
+    # A hard budget reserves against estimated cost derived from max_tokens pre-flight.
     access = get_access(
         app="budget-demo",
         policy={
             "name": "budget-policy",
             "mode": "enforce",
-            "budgetMode": "hard_strict",
+            "budgetMode": "hard",
             "allowedProviders": ["vertex_ai"],
             "allowedModels": [MODELS["default"]],
             "dailyBudgetUsd": DAILY_BUDGET_USD,

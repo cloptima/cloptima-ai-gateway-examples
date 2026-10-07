@@ -26,7 +26,7 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "rate-limit-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson rate "$REQUEST_RATE_LIMIT_PER_MINUTE" '{
-  name: "rate-limit-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "rate-limit-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model], requestRateLimitPerMinute: $rate}')"
 
 # Application code: process each task, backing off and retrying on HTTP 429.

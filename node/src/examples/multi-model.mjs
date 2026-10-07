@@ -28,7 +28,7 @@ async function main() {
     policy: {
       name: 'multi-model-policy',
       mode: 'enforce',
-      budgetMode: 'hard_fast',
+      budgetMode: 'hard',
       allowedProviders: ['vertex_ai'],
       allowedModels: [MODELS.default, MODELS.premium], // both models are allowlisted under one policy
     },

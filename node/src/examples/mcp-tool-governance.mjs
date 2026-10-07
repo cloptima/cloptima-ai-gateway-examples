@@ -85,7 +85,7 @@ async function main() {
     policy: {
       name: 'mcp-agent-policy',
       mode: 'enforce',
-      budgetMode: 'hard_fast',
+      budgetMode: 'hard',
       allowedProviders: ['vertex_ai'],
       allowedModels: [MODELS.default],
       allowedToolServers: [serverLabel], // the agent may only use this tool server

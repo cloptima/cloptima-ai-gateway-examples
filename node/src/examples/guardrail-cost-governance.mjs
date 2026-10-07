@@ -49,7 +49,7 @@ async function main() {
     policy: {
       name: 'guardrail-cost-policy',
       mode: 'enforce',
-      budgetMode: 'hard_fast',
+      budgetMode: 'hard',
       failMode: 'fail_closed',
       allowedProviders: ['vertex_ai'],
       allowedModels: [MODELS.default],

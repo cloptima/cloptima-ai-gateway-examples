@@ -28,7 +28,7 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "multi-model-demo" "$(jq -n --argjson models "$(printf '%s\n' "${MODELS[@]}" | jq -R . | jq -s .)" '{
-  name: "multi-model-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "multi-model-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: $models}')"
 
 # Application code: the same request against each model.

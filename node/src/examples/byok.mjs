@@ -58,7 +58,7 @@ async function main() {
     policy: {
       name: 'byok-policy',
       mode: 'enforce',
-      budgetMode: 'hard_fast',
+      budgetMode: 'hard',
       allowedProviders: ['openai'],
       allowedModels: ['openai/gpt-4o-mini'],
     },

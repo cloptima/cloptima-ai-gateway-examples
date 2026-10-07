@@ -35,7 +35,7 @@ async function main() {
     policy: {
       name: 'adaptive-routing-policy',
       mode: 'enforce',
-      budgetMode: 'hard_fast',
+      budgetMode: 'hard',
       allowedProviders: ['vertex_ai'],
       allowedModels: [...new Set(Object.values(CANDIDATE_MODELS).flat())],
       metadata: {

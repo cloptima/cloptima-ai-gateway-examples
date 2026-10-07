@@ -33,7 +33,7 @@ MODEL_FAMILY="$MODEL_DEFAULT"
 # the same call. Platform admins normally create this once in the Console, Terraform, or CI.
 echo "Creating policy with exact cache (enforce) and semantic cache (enforce), applyImmediately: true..."
 provision_app "semantic-cache-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "semantic-cache-enforce-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "semantic-cache-enforce-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model],
   promptRetentionMode: "full", exactCacheEnabled: true, exactCacheMode: "enforce",
   semanticCacheEnabled: true, semanticCacheMode: "enforce", applyImmediately: true}')"

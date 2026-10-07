@@ -24,7 +24,7 @@ echo ""
 # the Console, Terraform, or CI. Skipped when CLOPTIMA_VIRTUAL_KEY points at a key whose policy
 # already matches.
 get_access "guardrail-cost-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "guardrail-cost-policy", mode: "enforce", budgetMode: "hard_fast", failMode: "fail_closed",
+  name: "guardrail-cost-policy", mode: "enforce", budgetMode: "hard", failMode: "fail_closed",
   allowedProviders: ["vertex_ai"], allowedModels: [$model]}')" \
   "$(jq -n --argjson maxCostCents "$MAX_COST_PER_REQUEST_CENTS" '{
     name: "guardrail-cost-profile",

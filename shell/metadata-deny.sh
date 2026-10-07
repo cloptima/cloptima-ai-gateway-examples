@@ -31,7 +31,7 @@ else
   SUFFIX="$(run_suffix)"
   echo "Configuring a policy that requires team_id/app_id/environment metadata..."
   POLICY=$(create_policy "$(jq -n --arg name "attribution-policy-$SUFFIX" --arg model "$MODEL_DEFAULT" '{
-    name: $name, mode: "enforce", budgetMode: "hard_fast",
+    name: $name, mode: "enforce", budgetMode: "hard",
     allowedProviders: ["vertex_ai"], allowedModels: [$model],
     metadata: {required_metadata_keys: ["team_id", "app_id", "environment"]}}')")
   KEY=$(create_virtual_key "$(jq -n --arg name "vk-attribution-$SUFFIX" '{name: $name}')")

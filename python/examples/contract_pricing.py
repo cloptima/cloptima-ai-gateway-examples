@@ -115,7 +115,7 @@ def main() -> None:
         policy={
             "name": "contract-pricing-policy",
             "mode": "enforce",
-            "budgetMode": "hard_fast",
+            "budgetMode": "hard",
             "allowedProviders": [PROVIDER],
             "allowedModels": [CANONICAL_MODEL],
         },

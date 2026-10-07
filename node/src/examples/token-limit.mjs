@@ -29,7 +29,7 @@ async function main() {
     policy: {
       name: 'token-limit-policy',
       mode: 'enforce',
-      budgetMode: 'hard_fast',
+      budgetMode: 'hard',
       allowedProviders: ['vertex_ai'],
       allowedModels: [MODELS.default],
       maxOutputTokens: 100, // the minimum allowed value is 64

@@ -23,7 +23,7 @@ echo ""
 # once in the Console, Terraform, or CI. Skipped when CLOPTIMA_VIRTUAL_KEY points at a key
 # whose policy already matches.
 get_access "support-bot-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "support-guardrail-policy", mode: "enforce", budgetMode: "hard_fast", failMode: "fail_closed",
+  name: "support-guardrail-policy", mode: "enforce", budgetMode: "hard", failMode: "fail_closed",
   allowedProviders: ["vertex_ai"], allowedModels: [$model]}')" \
   "$(jq -n '{
     name: "support-guardrail-profile",

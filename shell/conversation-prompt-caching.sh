@@ -112,7 +112,7 @@ echo ""
 # Platform admins normally create it once in the Console, Terraform, or CI. Skipped when
 # CLOPTIMA_VIRTUAL_KEY points at a key whose policy already matches.
 get_access "coding-assistant-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "coding-assistant-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "coding-assistant-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
 
 # Application code: each turn resends the full message history plus one new short question.

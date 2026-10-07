@@ -2,7 +2,7 @@
 # Scheduled job under a small per-policy daily budget. Calls are admitted until the budget is
 # spent, then the gateway returns HTTP 402 and the job stops non-critical work.
 #
-# hard_strict reserves against an ESTIMATED cost derived from the request's max_tokens (a
+# A hard budget reserves against an ESTIMATED cost derived from the request's max_tokens (a
 # pessimistic worst case), not the realized post-completion cost, so every call passes a modest
 # explicit max_tokens to keep that estimate small and consistent.
 #
@@ -29,7 +29,7 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "budget-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson budget "$DAILY_BUDGET_USD" '{
-  name: "budget-policy", mode: "enforce", budgetMode: "hard_strict",
+  name: "budget-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model], dailyBudgetUsd: $budget}')"
 
 # Application code: run tasks until the gateway reports the budget is exhausted.

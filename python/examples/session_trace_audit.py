@@ -94,7 +94,7 @@ def main() -> None:
         policy={
             "name": "session-trace-policy",
             "mode": "enforce",
-            "budgetMode": "hard_fast",
+            "budgetMode": "hard",
             "allowedProviders": ["vertex_ai"],
             "allowedModels": [MODELS["default"]],
             "promptRetentionMode": "tool_io",  # capture tool calls and results, omit user chat text

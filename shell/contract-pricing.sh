@@ -81,7 +81,7 @@ graphql 'mutation CreateCommitment($input: CreateCommitmentInput!) { createCommi
 echo "Creating a policy + key..."
 TEAM_ID="Finance"; ENVIRONMENT="prod"
 provision_app "contract-pricing-demo" "$(jq -n --arg provider "$PROVIDER" --arg model "$CANONICAL_MODEL" '{
-  name: "contract-pricing-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "contract-pricing-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: [$provider], allowedModels: [$model]}')"
 
 # Application code: the credential header routes each call through your own provider account,

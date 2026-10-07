@@ -52,7 +52,7 @@ ACTIVE_SERVER=$(graphql "$CREATE_TOOL_SERVER" "$(jq -n --arg name "$SERVER_LABEL
 echo "  $(jq -r '.name' <<<"$ACTIVE_SERVER"): status \"$(jq -r '.status' <<<"$ACTIVE_SERVER")\""
 
 provision_app "mcp-agent-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --arg server "$SERVER_LABEL" '{
-  name: "mcp-agent-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "mcp-agent-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model],
   allowedToolServers: [$server]}')"
 

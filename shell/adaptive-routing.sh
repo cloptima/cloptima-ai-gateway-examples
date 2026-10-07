@@ -26,7 +26,7 @@ echo ""
 # Platform admins normally create it once in the Console, Terraform, or CI. Skipped when
 # CLOPTIMA_VIRTUAL_KEY points at a key whose policy already matches.
 get_access "adaptive-routing-demo" "$(jq -n --arg cheap "$MODEL_CHEAP" --arg balanced "$MODEL_BALANCED" --arg strong "$MODEL_STRONG" '{
-  name: "adaptive-routing-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "adaptive-routing-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: ([$cheap, $balanced, $strong] | unique),
   metadata: {routing: {adaptive: {
     mode: "observe", route_risk_ceiling: "low", candidate_set_version: "v1",

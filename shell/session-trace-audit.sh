@@ -95,7 +95,7 @@ TOOLS_JSON=$(jq -n --argjson a "$CHECK_ORDER_TOOL" --argjson b "$ISSUE_REFUND_TO
 echo "Creating policy with promptRetentionMode: 'tool_io'..."
 TEAM_ID="Support AI"; ENVIRONMENT="production"
 provision_app "support-agent-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "session-trace-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "session-trace-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model], promptRetentionMode: "tool_io"}')"
 echo "  policy $POLICY_ID, key minted, bound to app \"$APP_ID\"."
 echo ""

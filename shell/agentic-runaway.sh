@@ -42,7 +42,7 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "agent-loop-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson loop "$MAX_LOOP_ITERATIONS" --argjson retry "$MAX_RETRY_COUNT" '{
-  name: "agent-loop-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "agent-loop-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model],
   maxLoopIterations: $loop, maxRetryCount: $retry}')"
 

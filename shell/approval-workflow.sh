@@ -32,7 +32,7 @@ REQUESTED_DAILY_BUDGET_USD=25
 # and binding once in the Console, Terraform, or CI.
 echo "Creating a baseline policy with dailyBudgetUsd=\$$CURRENT_DAILY_BUDGET_USD..."
 provision_app "governed-app-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson budget "$CURRENT_DAILY_BUDGET_USD" '{
-  name: "governance-approval-policy", mode: "enforce", budgetMode: "hard_fast",
+  name: "governance-approval-policy", mode: "enforce", budgetMode: "hard",
   allowedProviders: ["vertex_ai"], allowedModels: [$model], dailyBudgetUsd: $budget}')"
 echo ""
 

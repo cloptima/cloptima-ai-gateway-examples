@@ -29,7 +29,7 @@ async function main() {
     policy: {
       name: 'prompt-release-policy',
       mode: 'enforce',
-      budgetMode: 'hard_fast',
+      budgetMode: 'hard',
       allowedProviders: ['vertex_ai'],
       allowedModels: [MODELS.default],
       promptRetentionMode: 'full',
