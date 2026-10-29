@@ -9,10 +9,10 @@ For compliance, security, and forensics, organizations must audit exact tool par
 without storing sensitive conversational user text.
 
 Cloptima provides:
-1. Selective Prompt Retention (promptRetentionMode: 'tool_io'): Tool calls, arguments,
+1. Selective Prompt Retention (prompt_retention_mode: "tool_io"): Tool calls, arguments,
    and results are captured verbatim for compliance, while user chat text is omitted.
 2. Cryptographic Session Ledger: Every step in an agent session is correlated via
-   'x-cloptima-agent-session-id' and anchored with a SHA-256 integrity hash (traceSha256).
+   'x-cloptima-agent-session-id' and anchored with a SHA-256 integrity hash (trace_sha256).
 
 Run standalone:
   python -m examples.session_trace_audit
@@ -94,10 +94,10 @@ def main() -> None:
         policy={
             "name": "session-trace-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
-            "promptRetentionMode": "tool_io",  # capture tool calls and results, omit user chat text
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
+            "prompt_retention_mode": "tool_io",  # capture tool calls and results, omit user chat text
         },
     )
 
@@ -198,29 +198,29 @@ def main() -> None:
         if attempt > 0:
             time.sleep(1.0)
         try:
-            session = gateway_admin.get_llm_agent_session(session_id=agent_session_id)
-            steps = (session or {}).get("steps") or []
-            if len(steps) >= turn_count and all(s.get("traceSha256") for s in steps):
+            session = gateway_admin.list_session_steps({"session_id": agent_session_id})
+            steps = (session or {}).get("items") or []
+            if len(steps) >= turn_count and all(s.get("trace_sha256") for s in steps):
                 break
         except Exception:
             pass
 
-    steps = (session or {}).get("steps") or []
-    print(f"Session Correlated: {(session or {}).get('agentSessionId') or agent_session_id} ({len(steps)} steps recorded)")
+    steps = (session or {}).get("items") or []
+    print(f"Session Correlated: {(session or {}).get('agent_session_id') or agent_session_id} ({len(steps)} steps recorded)")
     for index, step in enumerate(steps):
         print(f"\n  Step {index + 1}:")
-        print(f"    Request ID:    {step.get('requestId')}")
+        print(f"    Request ID:    {step.get('request_id')}")
         print(f"    Provider/Model: {step.get('provider')} / {step.get('model')}")
-        print(f"    Status:        {step.get('status')} ({step.get('inputTokens')} in / {step.get('outputTokens')} out, cost: ${step.get('costUsd')})")
-        invoked = ", ".join(step.get("responseToolNames") or []) or "none"
+        print(f"    Status:        {step.get('status')} ({step.get('input_tokens')} in / {step.get('output_tokens')} out, cost: ${step.get('cost_usd')})")
+        invoked = ", ".join(step.get("response_tool_names") or []) or "none"
         print(f"    Invoked Tool:  {invoked}")
-        print(f"    Trace SHA-256: {step.get('traceSha256') or 'none'}")
+        print(f"    Trace SHA-256: {step.get('trace_sha256') or 'none'}")
 
-    records_data = gateway_admin.get_llm_agent_session_records(session_id=agent_session_id)
-    records = (records_data or {}).get("records") or []
+    records_data = gateway_admin.list_session_records({"session_id": agent_session_id})
+    records = (records_data or {}).get("items") or []
     print(f"\nVerified tamper-evident records: {len(records)} tool trace items anchored to ledger.")
     for rec in records:
-        print(f"  Request {rec.get('requestId')} -> verification: {rec.get('verification')}")
+        print(f"  Request {rec.get('request_id')} -> verification: {rec.get('verification')}")
 
 
 if __name__ == "__main__":

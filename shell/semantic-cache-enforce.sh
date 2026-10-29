@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Completes what exact-semantic-cache.sh deliberately leaves at 'observe':
-# semanticCacheMode: 'enforce' needs a per-(app, route, model-family) class
-# approval (createLLMSemanticCacheClassApproval) on top of the policy flag,
-# AND setting 'enforce' on the policy itself auto-queues a separate entry in
-# the generic governance queue (LLMGatewayApproval, approvalType
-# 'semantic_cache_enforce') that must be reviewed before enforcement actually
-# activates - until then, effective behavior stays downgraded to 'suggest'.
-# This script creates the policy with applyImmediately: true, so - since the
-# ai:admin key already qualifies to review this itself - that entry is
-# approved and enforcement is live immediately, with no separate review step.
+# Completes what exact-semantic-cache.sh deliberately leaves at 'observe'. The
+# semantic cache modes are off, observe, and enforce. With
+# semantic_cache_review_required: true, enforce mode serves a semantic hit only
+# for an approved (app_id, route, model_family) class
+# (POST /v1/llm/semantic-cache/class-approvals). Without an approved class,
+# would-be hits are recorded but not served.
+# On plans with approval workflows, setting 'enforce' with review required also
+# queues an entry in the generic governance queue (approval_type
+# 'semantic_cache_enforce'). This script creates the policy with
+# apply_immediately: true, so - since the ai:admin key already qualifies to
+# review this itself - that entry is approved in the same call, with no
+# separate review step.
 # See ../docs/CACHE_AND_POLICY.md.
 #
 # Auth: CLOPTIMA_AI_ADMIN_KEY (creates the policy, key, and class approval).
@@ -23,39 +25,37 @@ require_admin_key
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 ROUTE="/v1/ai/chat/completions"
-# The class approval's modelFamily must be keyed on the full canonical model
-# ID (e.g. 'vertex_ai/gemini-3.5-flash-lite'), not just its last path segment
-# (e.g. 'gemini-3.5-flash-lite') - modelFamily requires the full canonical model ID.
-MODEL_FAMILY="$MODEL_DEFAULT"
+# A class approval names the model as the gateway records it: the model id
+# without its provider prefix (gemini-3.5-flash-lite).
+MODEL_FAMILY="${MODEL_DEFAULT##*/}"
 
 # Governance setup: a policy with exact cache and semantic cache both in enforce mode.
-# applyImmediately: true lets a qualifying admin key approve the auto-queued governance entry in
+# apply_immediately: true lets a qualifying admin key approve the auto-queued governance entry in
 # the same call. Platform admins normally create this once in the Console, Terraform, or CI.
-echo "Creating policy with exact cache (enforce) and semantic cache (enforce), applyImmediately: true..."
+echo "Creating policy with exact cache (enforce) and semantic cache (enforce), apply_immediately: true..."
 provision_app "semantic-cache-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "semantic-cache-enforce-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model],
-  promptRetentionMode: "full", exactCacheEnabled: true, exactCacheMode: "enforce",
-  semanticCacheEnabled: true, semanticCacheMode: "enforce", applyImmediately: true}')"
+  name: "semantic-cache-enforce-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model],
+  exact_cache_enabled: true, exact_cache_mode: "enforce",
+  semantic_cache_enabled: true, semantic_cache_mode: "enforce", semantic_cache_review_required: true,
+  apply_immediately: true}')"
 echo "Minted key and bound it to app $APP_ID."
 echo ""
 
-echo "Requesting the class approval semantic-cache enforcement needs for (app=$APP_ID, route=$ROUTE, modelFamily=$MODEL_FAMILY)..."
-CLASS_APPROVAL=$(graphql \
-  'mutation CreateClassApproval($input: LLMSemanticCacheClassApprovalInput!) {
-    createLLMSemanticCacheClassApproval(input: $input) { id appId route modelFamily createdAt }
-  }' \
-  "$(jq -n --arg appId "$APP_ID" --arg route "$ROUTE" --arg modelFamily "$MODEL_FAMILY" --arg notes "semantic-cache-enforce example" \
-    '{input: {appId: $appId, route: $route, modelFamily: $modelFamily, notes: $notes}}')")
-echo "  class approval granted: $(echo "$CLASS_APPROVAL" | jq -c '.createLLMSemanticCacheClassApproval')"
+echo "Requesting the class approval semantic-cache enforcement needs for (app=$APP_ID, route=$ROUTE, model_family=$MODEL_FAMILY)..."
+CLASS_APPROVAL=$(admin_api POST /v1/llm/semantic-cache/class-approvals "" \
+  "$(jq -n --arg app_id "$APP_ID" --arg route "$ROUTE" --arg model_family "$MODEL_FAMILY" --arg notes "semantic-cache-enforce example" \
+    '{app_id: $app_id, route: $route, model_family: $model_family, notes: $notes}')")
+echo "  class approval granted: $(jq -c '{id, app_id, route, model_family, created_at}' <<<"$CLASS_APPROVAL")"
 
 echo ""
-echo "Checking the generic governance queue for the entry auto-queued by semanticCacheMode: 'enforce'..."
-APPLIED=$(list_llm_gateway_approvals "applied" 50)
-AUTO_APPLIED=$(echo "$APPLIED" | jq -c --arg policyId "$POLICY_ID" '.[] | select(.approvalType == "semantic_cache_enforce" and .targetId == $policyId)')
+echo "Checking the generic governance queue for the entry auto-queued by semantic_cache_mode: 'enforce'..."
+APPLIED=$(list_approvals '{"status": "applied", "limit": 50}')
+AUTO_APPLIED=$(jq -c --arg policy_id "$POLICY_ID" '.items[] | select(.approval_type == "semantic_cache_enforce" and .target_id == $policy_id)
+  | {id, approval_type, status, target_id, requested_at, required_approver_role}' <<<"$APPLIED")
 if [ -n "$AUTO_APPLIED" ]; then
   echo "  applied: $AUTO_APPLIED"
-  echo "  applyImmediately: true above meant this entry was approved and applied right away, instead of sitting"
+  echo "  apply_immediately: true above meant this entry was approved and applied right away, instead of sitting"
   echo "  pending for a second identity to review in the console's Audit tab ($CONSOLE_AUDIT)."
 else
   echo "  no matching applied entry found."
@@ -96,5 +96,5 @@ for i in "${!SEMANTIC_PROMPTS[@]}"; do
 done
 
 echo ""
-echo "Because applyImmediately: true approved the governance entry, semantic-cache enforcement is live from the start."
+echo "Because apply_immediately: true approved the governance entry, semantic-cache enforcement is live from the start."
 echo "Evidence: Audit tab ($CONSOLE_AUDIT) - shows the applied semantic_cache_enforce approval and the per-call cache hit/miss trail; Policies tab ($CONSOLE_POLICIES) shows the policy's cache config."

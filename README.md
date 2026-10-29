@@ -31,17 +31,17 @@ Each example then adds one governance control and shows the application code tha
 
 Credentials:
 
-- **Node, Python, and shell**: set `CLOPTIMA_VIRTUAL_KEY` to run only the application code against a key you already have, or set `CLOPTIMA_AI_ADMIN_KEY` and the example creates its own policy, key, and binding. Examples that configure governance resources (approvals, MCP tool servers, prompts, price sheets, ROI, session audit) need the admin key.
+- **Node, Python, and shell**: set `CLOPTIMA_VIRTUAL_KEY` to run only the application code against a key you already have, or set `CLOPTIMA_AI_ADMIN_KEY` and the example creates its own policy, key, and binding. Examples that configure governance resources (approvals, MCP tool servers, price sheets, ROI, session audit) need the admin key.
 
-Generate either key in the Cloptima Console under Settings > API Keys. The two managed-provider guardrail examples also need an available Cloptima managed-credit balance, because their Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails scans are billable.
+Generate either key in the Cloptima Console under Settings > API Keys. Except for `byok` and `contract-pricing`, which use your own provider credential, the examples call models on Cloptima-managed credentials, so the account needs available AI credits. Cloptima-managed content-safety scans (`content-safety-guardrail`) are billed to the same credits.
 
 ## Suggested path
 
 1. **Connect**: `quickstart-openai` or `quickstart-anthropic`.
-2. **Protect**: `pii-guardrail`, `provider-deny`, `mcp-tool-governance`.
+2. **Protect**: `pii-guardrail`, `content-safety-guardrail`, `provider-deny`, `mcp-tool-governance`.
 3. **Control cost and load**: `budget-limit`, `rate-limit`, `token-limit`, `agentic-runaway`, `metadata-deny`.
-4. **Optimize**: `multi-model`, `adaptive-routing`, `exact-semantic-cache`, `conversation-prompt-caching`.
-5. **Govern changes**: `approval-workflow`, `semantic-cache-enforce`, `prompt-release-workflow`.
+4. **Optimize**: `multi-model`, `exact-semantic-cache`, `conversation-prompt-caching`.
+5. **Govern changes**: `approval-workflow`, `semantic-cache-enforce`.
 6. **Prove value**: `unit-economics-roi`, `contract-pricing`, `session-trace-audit`, `byok`.
 
 ## Pick a stack
@@ -69,23 +69,20 @@ Each directory has the same set of independent example scripts:
 | `token-limit` | A realistic output-token cap blocking a too-long request pre-flight. |
 | `budget-limit` | A small daily spend cap admitting several calls, then denying the rest. |
 | `agentic-runaway` | Retry and loop-iteration limits derived from conversation tool-call transcripts, blocking runaway loops. |
-| `pii-guardrail` | A profile custom rule blocks a fictional SSN format before model egress. |
+| `pii-guardrail` | A guardrail profile redacts US personal data before it reaches the model provider and restores it in the answer; a custom rule blocks a message that carries an employee ID. |
 | `exact-semantic-cache` | Exact-cache (enforce) and semantic-cache (observe) evidence. |
 | `conversation-prompt-caching` | Provider-side prompt caching on a growing multi-turn conversation with long system context. |
 | `provider-deny` | A non-Vertex model request blocked by a Vertex-only policy. |
 | `metadata-deny` | A deliberately unscoped key with no attribution headers, blocked. |
 | `byok` | Bring your own provider credential and route it through Cloptima's governance layer. |
 | `unit-economics-roi` | A cost-center agent (ROI vs. a pre-LLM baseline) and a profit-center agent (real booked revenue) side by side, each with its own computed report. |
-| `contract-pricing` | Seed a negotiated-rate price sheet and commitment, then read back retail vs. contracted vs. effective cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
+| `contract-pricing` | Seed a negotiated-rate price sheet, then read back retail vs. contracted cost on customer-owned credentials (needs `PROVIDER_API_KEY` in `.env`). |
 | `semantic-cache-enforce` | Semantic-cache enforce mode: the per-(app, route, model) class approval it needs, plus immediate enforcement and the applied governance-queue record. |
 | `approval-workflow` | Request a manual budget-change approval, show one request pending, then apply a second request immediately through the generic governance queue. |
-| `guardrail-detector-categories` | Creates isolated policy-bound profiles and exercises Google Model Armor, Azure AI Content Safety, and Amazon Bedrock Guardrails (requires available managed credits). |
-| `guardrail-cost-governance` | Sets a per-request scan cost cap in a provider-backed guardrail profile (requires available managed credits). |
-| `adaptive-routing` | Adaptive routing in observe mode across cheap/balanced/strong candidate model tiers. |
-| `prompt-release-workflow` | Prompt template, version, automated eval, quality gating, and release approval - demonstrating failed-gate block and successful activation via applyImmediately. |
+| `content-safety-guardrail` | Cloptima-managed content safety answers a normal request and blocks a prompt-injection attempt (requires available managed credits). |
 | `mcp-tool-governance` | MCP server registration, approval rules, tool-definition review, and blocked server/tool checks. |
-| `session-trace-audit` | Tool I/O capture under `promptRetentionMode: 'tool_io'` with multi-turn session correlation, immediate ledger cryptographic hashes (`traceSha256`), and audit verification. |
-| `cleanup` | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, datasets, and ROI calibrations; archive prompt templates and price sheets; revoke keys and credentials; reject pending approvals. |
+| `session-trace-audit` | Tool I/O capture under `prompt_retention_mode: tool_io` with multi-turn session correlation, immediate ledger cryptographic hashes (`trace_sha256`), and audit verification. |
+| `cleanup` | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, and ROI calibrations; archive price sheets; revoke keys and credentials; reject pending approvals. |
 
 See each directory's own README for exact run commands. Every illustrative policy limit (rate, token, budget, loop-iteration caps) is a realistic starting point printed by the script itself, not a fixed platform requirement - change the constant near the top of any script and re-run it to see the behavior move. Note: Rate limits are enforced per calendar minute window (e.g., 10:00:00-10:00:59 UTC), not a rolling 60-second window.
 
@@ -102,7 +99,7 @@ Each language directory includes a `cleanup` utility to reset your account's gat
 You can run this cleanup script to start from a clean state, or after you finish.
 
 > [!WARNING]
-> **Account-Wide Deletion Warning**: The cleanup script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, eval datasets, and ROI calibrations; archives **all** prompt templates and price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the authenticated account.
+> **Account-Wide Deletion Warning**: The cleanup script permanently deletes **all** AI gateway policies, policy bindings, guardrail profiles, registered MCP tool servers, and ROI calibrations; archives **all** price sheets; revokes **all** active virtual keys and provider credentials; and rejects **all** pending approval requests in the authenticated account.
 >
 > Only run cleanup in dedicated sandbox, evaluation, or demo accounts. **Never** run this script in an account containing production traffic, live API keys, or persistent business policies.
 
@@ -124,10 +121,11 @@ Every script prints an `Evidence:` line pointing at one of these. `/` and `/llm/
 | Dashboard | `https://app.cloptima.ai` | Realized cache savings, blended effective cost (retail vs. contracted), and other org-wide FinOps rollups. |
 | Explorer | `https://app.cloptima.ai/llm/spend` | Per-request attributed spend, usage, latency, and cached-token counts. |
 | Economics | `https://app.cloptima.ai/llm/unit-economics` | Cost-per-unit, margin, and net-ROI computed from unit-metrics + ROI calibration. |
-| Recommendations | `https://app.cloptima.ai/llm/recommendations` | Cost-optimization suggestions (model right-sizing, caching, guardrail tuning) computed from real usage history over time - not produced by any single example run. |
 | Policies | `https://app.cloptima.ai/llm/policies` | The policy configs (limits, guardrails, cache modes) each example creates. |
+| Guardrails | `https://app.cloptima.ai/llm/guardrails` | Guardrail profiles: protected data templates, custom rules, and content safety. |
 | Credentials | `https://app.cloptima.ai/llm/credentials` | Virtual keys and BYOK provider credentials. |
 | Audit | `https://app.cloptima.ai/llm/audit` | Blocked-request records - policy/provider/model/token/guardrail/agentic-limit blocks. |
+| Sessions | `https://app.cloptima.ai/llm/sessions` | Agent sessions: each step, its tools, and its ledger hash. |
 
 ## How the gateway works, in short
 
@@ -135,7 +133,7 @@ Every script prints an `Evidence:` line pointing at one of these. `/` and `/llm/
 - OpenAI-compatible clients: base URL `<gateway>/v1/ai`, key sent as `Authorization: Bearer <virtual key>`.
 - Anthropic-compatible clients: base URL `<gateway>` root, key sent as `x-api-key: <virtual key>`.
 - Models are addressed by Cloptima canonical ID, e.g. `vertex_ai/gemini-3.5-flash-lite`.
-- Policies, bindings, and virtual keys are created via the public `createLLMGatewayPolicy` / `createLLMGatewayPolicyBinding` / `createLLMGatewayKey` GraphQL mutations, using your `ai:admin` key - see any example's `lib`/`gatewayAdmin` helper for the exact calls.
+- Policies, bindings, and virtual keys are created with the public REST API (`POST /v1/llm/policies`, `POST /v1/llm/policy-bindings`, `POST /v1/llm/gateway-keys`), using your `ai:admin` key - see each language's gateway admin helper for the exact calls.
 - Managed-gateway attribution, agent-session identity, and ROI business-transaction context can ride as documented `x-cloptima-*` request headers with no special inference SDK. Additional actor, release, finance, tenant, run, tool, and trace dimensions belong to direct telemetry integrations; see `docs/ENVIRONMENT.md` for the capability matrix.
 - Policy enforcement (allowed providers/models, rate/token/budget limits, agentic-runaway limits, required metadata) happens server-side based on which virtual key you used. Most blocks come back as `403` with `{error, reason, violations}`; a rate-limit block is `429`; a fully unscoped key with no attribution at all comes back as a plain `400` instead - see `docs/ENVIRONMENT.md`.
 - Unit economics (cost per unit, margin, ROI) are computed from real gateway/telemetry traffic plus a unit-metrics batch you submit yourself - see `unit-economics-roi`.

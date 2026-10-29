@@ -35,10 +35,10 @@ def main() -> None:
         policy={
             "name": "budget-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
-            "dailyBudgetUsd": DAILY_BUDGET_USD,
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
+            "daily_budget_usd": DAILY_BUDGET_USD,
         },
     )
 

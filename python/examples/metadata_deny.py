@@ -35,9 +35,9 @@ def main() -> None:
         policy = gateway_admin.create_policy({
             "name": f"attribution-policy-{suffix}",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
             "metadata": {"required_metadata_keys": ["team_id", "app_id", "environment"]},
         })
 
@@ -45,13 +45,13 @@ def main() -> None:
         key = gateway_admin.create_virtual_key({"name": f"vk-attribution-{suffix}"})
 
         gateway_admin.create_binding({
-            "policyId": policy["id"],
-            "principalId": key["id"],
-            "actorType": "service",
+            "policy_id": policy["id"],
+            "principal_id": key["id"],
+            "actor_type": "service",
             "priority": 5,
-            "acknowledgeOverlap": True,
+            "acknowledge_overlap": True,
         })
-        virtual_key = key["accessToken"]
+        virtual_key = key["access_token"]
     else:
         raise RuntimeError(
             "Set CLOPTIMA_VIRTUAL_KEY to use an existing key, or CLOPTIMA_AI_ADMIN_KEY to let this example create its own policy and key (see .env.example)."

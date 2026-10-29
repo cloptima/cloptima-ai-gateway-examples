@@ -18,7 +18,7 @@
 import { openaiClient } from '../lib/client.mjs';
 import { getAccess } from '../lib/access.mjs';
 import { runSuffix } from '../lib/config.mjs';
-import { graphql } from '../lib/gatewayAdmin.mjs';
+import { adminApi } from '../lib/gatewayAdmin.mjs';
 
 async function resolveProviderCredentialId() {
   if (process.env.CLOPTIMA_PROVIDER_CREDENTIAL_ID) {
@@ -35,16 +35,12 @@ async function resolveProviderCredentialId() {
 
   const suffix = runSuffix();
   console.log('Registering an enterprise provider credential (BYOK)...');
-  const created = await graphql(
-    `mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
-      createLLMProviderCredential(input: $input) { id provider displayName }
-    }`,
-    { input: { provider: 'openai', displayName: `byok-openai-${suffix}`, apiKey: providerApiKey } },
-  );
+  const created = await adminApi('POST', '/v1/llm/provider-credentials', {
+    body: { provider: 'openai', display_name: `byok-openai-${suffix}`, api_key: providerApiKey },
+  });
 
-  const credentialId = created.createLLMProviderCredential.id;
-  console.log(`Registered credential: ${credentialId} (${created.createLLMProviderCredential.displayName})`);
-  return credentialId;
+  console.log(`Registered credential: ${created.id} (${created.display_name})`);
+  return created.id;
 }
 
 async function main() {
@@ -58,9 +54,9 @@ async function main() {
     policy: {
       name: 'byok-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['openai'],
-      allowedModels: ['openai/gpt-4o-mini'],
+      budget_mode: 'hard',
+      allowed_providers: ['openai'],
+      allowed_models: ['openai/gpt-4o-mini'],
     },
   });
   const client = openaiClient(access.virtualKey, {

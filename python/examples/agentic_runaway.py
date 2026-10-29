@@ -6,9 +6,9 @@ tool-calling loops and repeated tool retries without requiring custom client tra
 Pattern:
 1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
 2. Case 1: Agent enters a multi-turn tool calling loop checking job status.
-   Gateway trips maxLoopIterations cap and denies further turns (HTTP 403).
+   Gateway trips max_loop_iterations cap and denies further turns (HTTP 403).
 3. Case 2: Agent resubmits the same tool call repeatedly.
-   Gateway trips maxRetryCount cap and denies repeated retries (HTTP 403).
+   Gateway trips max_retry_count cap and denies repeated retries (HTTP 403).
 4. Application safely terminates the agent loop and returns control to the user.
 
 Run standalone:
@@ -47,19 +47,19 @@ def main() -> None:
         policy={
             "name": "agent-loop-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
-            "maxLoopIterations": 3,
-            "maxRetryCount": 2,
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
+            "max_loop_iterations": 3,
+            "max_retry_count": 2,
         },
     )
 
     # Application code: the official SDK, pointed at the gateway with a virtual key.
     client = openai_client(access["virtual_key"])
 
-    # --- Case 1: Multi-Turn Conversation Loop Protection (maxLoopIterations) ---
-    print("--- Case 1: Multi-Turn Agent Loop Protection (maxLoopIterations) ---")
+    # --- Case 1: Multi-Turn Conversation Loop Protection (max_loop_iterations) ---
+    print("--- Case 1: Multi-Turn Agent Loop Protection (max_loop_iterations) ---")
     print("Starting autonomous agent loop with max 3 permitted tool iterations...\n")
 
     messages = [
@@ -115,7 +115,7 @@ def main() -> None:
             else:
                 raise
 
-    # --- Case 2: Repeated Retry Protection on Single Tool Call (maxRetryCount) ---
+    # --- Case 2: Repeated Retry Protection on Single Tool Call (max_retry_count) ---
     print("--- Case 2: Repeated Retry Protection on a Single Tool Call ---")
     print('Resubmitting results for tool_call_id "call-job-99" (max 2 retries allowed)...\n')
 

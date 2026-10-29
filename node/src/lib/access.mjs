@@ -7,9 +7,9 @@ const ENVIRONMENT = 'development';
 // Governance setup: creates the policy (and optional guardrail profile), a
 // virtual key, and the binding that attaches the policy to that key's
 // team/app/environment. Platform teams normally do this once in the Console,
-// Terraform, or CI. Each example passes its policy definition inline so the
-// configuration being demonstrated is visible next to the application code.
-// Requires CLOPTIMA_AI_ADMIN_KEY.
+// Terraform, or CI. Each example passes its policy definition inline, with the
+// API's field names, so the configuration being demonstrated is visible next
+// to the application code. Requires CLOPTIMA_AI_ADMIN_KEY.
 export async function provisionApp({ app, policy, guardrailProfile, team = TEAM, environment = ENVIRONMENT }) {
   const suffix = runSuffix();
   const appId = `${app}-${suffix}`;
@@ -20,19 +20,19 @@ export async function provisionApp({ app, policy, guardrailProfile, team = TEAM,
   const createdPolicy = await createPolicy({
     ...policy,
     name: `${policy.name}-${suffix}`,
-    ...(profile && { guardrailProfileId: profile.id }),
+    ...(profile && { guardrail_profile_id: profile.id }),
   });
-  const key = await createVirtualKey({ name: `vk-${appId}`, teamId: team, appId, environment });
+  const key = await createVirtualKey({ name: `vk-${appId}`, team_id: team, app_id: appId, environment });
   await createBinding({
-    policyId: createdPolicy.id,
-    teamId: team,
-    appId,
+    policy_id: createdPolicy.id,
+    team_id: team,
+    app_id: appId,
     environment,
     priority: 10,
-    acknowledgeOverlap: true,
+    acknowledge_overlap: true,
   });
 
-  return { virtualKey: key.accessToken, appId, teamId: team, environment, policy: createdPolicy, profile, suffix };
+  return { virtualKey: key.access_token, appId, teamId: team, environment, policy: createdPolicy, profile, suffix };
 }
 
 // Returns the virtual key the application code should use.

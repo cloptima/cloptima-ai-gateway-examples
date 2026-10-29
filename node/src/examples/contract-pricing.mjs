@@ -16,7 +16,7 @@
 import { openaiClient } from '../lib/client.mjs';
 import { provisionApp } from '../lib/access.mjs';
 import { runSuffix } from '../lib/config.mjs';
-import { graphql } from '../lib/gatewayAdmin.mjs';
+import { adminApi } from '../lib/gatewayAdmin.mjs';
 
 const PROVIDER = 'openai';
 const MODEL = 'gpt-4o-mini';
@@ -41,13 +41,10 @@ async function resolveProviderCredentialId() {
 
   const suffix = runSuffix();
   console.log('Registering provider credential (BYOK)...');
-  const created = await graphql(
-    `mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
-      createLLMProviderCredential(input: $input) { id provider displayName }
-    }`,
-    { input: { provider: PROVIDER, displayName: `byok-openai-${suffix}`, apiKey: providerApiKey } },
-  );
-  return created.createLLMProviderCredential.id;
+  const created = await adminApi('POST', '/v1/llm/provider-credentials', {
+    body: { provider: PROVIDER, display_name: `byok-openai-${suffix}`, api_key: providerApiKey },
+  });
+  return created.id;
 }
 
 async function setupEnterprisePriceSheet(suffix) {
@@ -56,46 +53,33 @@ async function setupEnterprisePriceSheet(suffix) {
   effectiveEnd.setUTCFullYear(effectiveEnd.getUTCFullYear() + 1);
 
   console.log(`Setting up enterprise price sheet with negotiated rates for ${MODEL}...`);
-  const { createPriceSheet } = await graphql(
-    `mutation CreatePriceSheet($input: CreatePriceSheetInput!) {
-      createPriceSheet(input: $input) { id name status }
-    }`,
-    {
-      input: {
-        name: `Enterprise Agreement (${suffix})`,
-        owner: 'cloptima-ai-gateway-examples',
-        effectiveStart: now.toISOString(),
-        effectiveEnd: effectiveEnd.toISOString(),
-      },
+  const priceSheet = await adminApi('POST', '/v1/llm/pricing/sheets', {
+    body: {
+      name: `Enterprise Agreement (${suffix})`,
+      owner: 'cloptima-ai-gateway-examples',
+      effective_start: now.toISOString(),
+      effective_end: effectiveEnd.toISOString(),
     },
-  );
+  });
+  const sheetPath = `/v1/llm/pricing/sheets/${encodeURIComponent(priceSheet.id)}`;
 
-  await graphql(
-    `mutation AddRateOverrides($priceSheetId: ID!, $overrides: [RateOverrideInput!]!) {
-      addRateOverrides(priceSheetId: $priceSheetId, overrides: $overrides) {
-        id provider model inputRatePerMillion outputRatePerMillion
-      }
-    }`,
-    {
-      priceSheetId: createPriceSheet.id,
+  await adminApi('POST', `${sheetPath}/overrides`, {
+    body: {
       overrides: [{
         provider: PROVIDER,
         model: MODEL,
-        inputRatePerMillion: CONTRACT_INPUT_RATE,
-        outputRatePerMillion: CONTRACT_OUTPUT_RATE,
-        effectiveStart: now.toISOString(),
-        effectiveEnd: effectiveEnd.toISOString(),
+        input_rate_per_million: CONTRACT_INPUT_RATE,
+        output_rate_per_million: CONTRACT_OUTPUT_RATE,
+        effective_start: now.toISOString(),
+        effective_end: effectiveEnd.toISOString(),
       }],
     },
-  );
+  });
 
-  await graphql(
-    `mutation ApprovePriceSheet($id: ID!) { approvePriceSheet(id: $id) { id status approvedAt } }`,
-    { id: createPriceSheet.id },
-  );
+  await adminApi('POST', `${sheetPath}/approve`);
 
-  console.log(`Enterprise price sheet approved: ${createPriceSheet.id}`);
-  return createPriceSheet;
+  console.log(`Enterprise price sheet approved: ${priceSheet.id}`);
+  return priceSheet;
 }
 
 async function main() {
@@ -111,9 +95,9 @@ async function main() {
     policy: {
       name: 'contract-pricing-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: [PROVIDER],
-      allowedModels: [CANONICAL_MODEL],
+      budget_mode: 'hard',
+      allowed_providers: [PROVIDER],
+      allowed_models: [CANONICAL_MODEL],
     },
   });
 
@@ -150,18 +134,10 @@ async function main() {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     if (attempt > 0) await sleep(2000);
     try {
-      const result = await graphql(
-        `query Dashboard($startTime: DateTime!, $endTime: DateTime!) {
-          llmFinanceDashboard(window: "custom", startTime: $startTime, endTime: $endTime) {
-            retailCostUsd
-            contractedCostUsd
-            hasActiveContract
-          }
-        }`,
-        { startTime: verificationStart, endTime: new Date().toISOString() },
-      );
-      const d = result?.llmFinanceDashboard;
-      if (d?.hasActiveContract) {
+      const d = await adminApi('GET', '/v1/llm/finance/dashboard', {
+        query: { window: 'custom', start_time: verificationStart, end_time: new Date().toISOString() },
+      });
+      if (d?.has_active_contract) {
         dashboard = d;
         break;
       }
@@ -172,10 +148,10 @@ async function main() {
 
   if (dashboard) {
     console.log('\n--- FinOps Reconciliation Summary ---');
-    console.log(`Active Enterprise Contract: ${dashboard.hasActiveContract ? 'Yes' : 'No'}`);
-    console.log(`Standard Retail Cost: $${dashboard.retailCostUsd}`);
-    console.log(`Effective Contracted Cost: $${dashboard.contractedCostUsd}`);
-    const savings = Number(dashboard.retailCostUsd) - Number(dashboard.contractedCostUsd);
+    console.log(`Active Enterprise Contract: ${dashboard.has_active_contract ? 'Yes' : 'No'}`);
+    console.log(`Standard Retail Cost: $${dashboard.retail_cost_usd}`);
+    console.log(`Effective Contracted Cost: $${dashboard.contracted_cost_usd}`);
+    const savings = Number(dashboard.retail_cost_usd) - Number(dashboard.contracted_cost_usd);
     console.log(`Realized Savings: $${savings.toFixed(4)}`);
   } else {
     console.log('Finance dashboard metrics recorded; newly approved rate sheets reconcile in reporting shortly.');

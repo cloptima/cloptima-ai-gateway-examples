@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Knowledge-base Q&A under a caching policy. Exact cache (enforce, full retention - required to
-# replay cached responses) serves a repeated prompt without a model call. Semantic cache runs in
-# observe mode: paraphrased questions are evaluated for hits (enforce mode additionally needs a
-# per-app, per-route, per-model-family approval - see semantic-cache-enforce.sh).
+# Knowledge-base Q&A under a caching policy. Exact cache (enforce) serves a repeated prompt
+# without a model call. Semantic cache runs in observe mode: paraphrased questions are evaluated
+# for hits (enforce mode with review required also needs a per-app, per-route, per-model-family
+# class approval - see semantic-cache-enforce.sh).
 #
 # There is no client-side cache toggle: caching is entirely policy-driven (see
 # ../docs/CACHE_AND_POLICY.md). Cache writes are processed in the background, so a repeat sent
@@ -27,11 +27,10 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "knowledge-cache-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "knowledge-cache-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model],
-  promptRetentionMode: "full",
-  exactCacheEnabled: true, exactCacheMode: "enforce", exactCacheTtlSeconds: 3600,
-  semanticCacheEnabled: true, semanticCacheMode: "observe", semanticCacheSimilarityThreshold: 0.85}')"
+  name: "knowledge-cache-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model],
+  exact_cache_enabled: true, exact_cache_mode: "enforce", exact_cache_ttl_seconds: 3600,
+  semantic_cache_enabled: true, semantic_cache_mode: "observe", semantic_cache_similarity_threshold: 0.85}')"
 
 # Application code: ask a question and report latency.
 ask() {

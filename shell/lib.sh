@@ -26,8 +26,8 @@ CONSOLE_ROOT="https://app.cloptima.ai/llm"
 CONSOLE_DASHBOARD="https://app.cloptima.ai"
 CONSOLE_SPEND="$CONSOLE_ROOT/spend"
 CONSOLE_UNIT_ECONOMICS="$CONSOLE_ROOT/unit-economics"
-CONSOLE_RECOMMENDATIONS="$CONSOLE_ROOT/recommendations"
 CONSOLE_POLICIES="$CONSOLE_ROOT/policies"
+CONSOLE_GUARDRAILS="$CONSOLE_ROOT/guardrails"
 CONSOLE_CREDENTIALS="$CONSOLE_ROOT/credentials"
 CONSOLE_AUDIT="$CONSOLE_ROOT/audit"
 CONSOLE_SESSIONS="$CONSOLE_ROOT/sessions"
@@ -60,87 +60,104 @@ run_suffix() {
   printf '%04x%02x' "$((RANDOM % 65536))" "$((RANDOM % 256))"
 }
 
-# graphql <query> <variables_json> -> prints .data on success, exits 1 on error
-graphql() {
-  local query="$1" variables="$2"
-  local body response
+# urlencode <value> -> prints the value percent-encoded for a URL path segment
+# or query value.
+urlencode() {
+  jq -rn --arg value "$1" '$value | @uri'
+}
+
+# admin_api <method> <path> [query_json] [body_json]
+# Calls the Cloptima REST API with CLOPTIMA_AI_ADMIN_KEY and prints the JSON
+# response body (nothing for 204 No Content). query_json is an object of query
+# parameters: null values are left out, and an array value repeats its key.
+# A POST always carries a JSON body; an operation that takes none gets {}.
+# On a non-2xx status it prints the status and the error code and message to
+# stderr and exits 1.
+admin_api() {
+  local method="$1" path="$2" query_json="${3:-}" body="${4:-}"
+  local url="$BASE_URL$path" query response http_code detail
   require_admin_key
-  body=$(jq -n --arg query "$query" --argjson variables "$variables" '{query: $query, variables: $variables}')
-  response=$(curl -sS -X POST "$BASE_URL/graphql" \
-    -H "Authorization: Bearer $CLOPTIMA_AI_ADMIN_KEY" -H "Content-Type: application/json" -H "User-Agent: $USER_AGENT" -d "$body")
-  if echo "$response" | jq -e '.errors' >/dev/null 2>&1; then
-    echo "GraphQL error: $(echo "$response" | jq -c '.errors')" >&2
+  if [ -n "$query_json" ]; then
+    query=$(jq -r '[to_entries[] | .key as $key | (.value | if type == "array" then .[] else . end)
+      | select(. != null) | "\($key | @uri)=\(tostring | @uri)"] | join("&")' <<<"$query_json") || exit 1
+    if [ -n "$query" ]; then
+      url="$url?$query"
+    fi
+  fi
+  if [ -z "$body" ] && [ "$method" = "POST" ]; then
+    body='{}'
+  fi
+  if [ -n "$body" ]; then
+    response=$(printf '%s' "$body" | curl -sS -w '\n%{http_code}' -X "$method" "$url" \
+      -H "Authorization: Bearer $CLOPTIMA_AI_ADMIN_KEY" -H "User-Agent: $USER_AGENT" \
+      -H "Content-Type: application/json" --data-binary @-) || exit 1
+  else
+    response=$(curl -sS -w '\n%{http_code}' -X "$method" "$url" \
+      -H "Authorization: Bearer $CLOPTIMA_AI_ADMIN_KEY" -H "User-Agent: $USER_AGENT") || exit 1
+  fi
+  http_code="${response##*$'\n'}"
+  response="${response%$'\n'*}"
+  if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+    detail=$(jq -er '.error | select(type == "object") | "\(.code): \(.message)"' <<<"$response" 2>/dev/null) || detail="$response"
+    echo "$method $path failed (HTTP $http_code): $detail" >&2
     exit 1
   fi
-  echo "$response" | jq '.data'
+  if [ -n "$response" ]; then
+    printf '%s\n' "$response"
+  fi
 }
 
-# create_policy <policy_input_json> -> prints {id, name}
+# create_policy <policy_json> -> prints the created policy
 create_policy() {
-  local input="$1" variables
-  variables=$(jq -n --argjson input "$input" '{input: $input}')
-  graphql 'mutation CreatePolicy($input: LLMGatewayPolicyInput!) { createLLMGatewayPolicy(input: $input) { id name } }' \
-    "$variables" | jq -c '.createLLMGatewayPolicy'
+  admin_api POST /v1/llm/policies "" "$1"
 }
 
-# create_guardrail_profile <profile_input_json> -> prints {id, name, publishedVersion}
+# create_guardrail_profile <profile_json> -> prints the created profile,
+# including published_version
 create_guardrail_profile() {
-  local input="$1" variables
-  variables=$(jq -n --argjson input "$input" '{input: $input}')
-  graphql 'mutation CreateGuardrailProfile($input: LLMGuardrailProfileInput!) {
-      createLLMGuardrailProfile(input: $input) { id name publishedVersion { version } }
-    }' "$variables" | jq -c '.createLLMGuardrailProfile'
+  admin_api POST /v1/llm/guardrail-profiles "" "$1"
 }
 
-# create_virtual_key <key_input_json> -> prints {id, accessToken, tokenPrefix, expiresAt}
+# create_virtual_key <key_json> -> prints the created key, including
+# access_token (shown once) and token_prefix
 create_virtual_key() {
-  local input="$1" variables
-  variables=$(jq -n --argjson input "$input" '{input: $input}')
-  graphql 'mutation CreateKey($input: CreateLLMGatewayKeyInput!) { createLLMGatewayKey(input: $input) { id accessToken tokenPrefix expiresAt } }' \
-    "$variables" | jq -c '.createLLMGatewayKey'
+  admin_api POST /v1/llm/gateway-keys "" "$1"
 }
 
-# create_binding <binding_input_json> -> prints {id}
+# create_binding <binding_json> -> prints the created binding
 create_binding() {
-  local input="$1" variables
-  variables=$(jq -n --argjson input "$input" '{input: $input}')
-  graphql 'mutation CreateBinding($input: LLMGatewayPolicyBindingInput!) { createLLMGatewayPolicyBinding(input: $input) { id } }' \
-    "$variables" | jq -c '.createLLMGatewayPolicyBinding'
+  admin_api POST /v1/llm/policy-bindings "" "$1"
 }
 
-# Generic governance queue - any policy/budget/route change that needs
-# sign-off before it takes effect goes through this same queue, not a
-# scenario-specific approval queue. Shared by approval-workflow.sh and
-# semantic-cache-enforce.sh (the latter reads it to show the auto-queued
-# entry a semanticCacheMode: 'enforce' policy creates).
+# Generic governance queue - any policy, budget, or tool-server change that
+# needs sign-off before it takes effect goes through this same queue, not a
+# scenario-specific approval queue.
 #
-# create_llm_gateway_approval <approval_input_json> -> prints
-# {id, approvalType, status, requiredApproverRole, targetId, requestedAt}
-create_llm_gateway_approval() {
-  local input="$1" variables
-  variables=$(jq -n --argjson input "$input" '{input: $input}')
-  graphql 'mutation CreateApproval($input: LLMGatewayApprovalInput!) {
-      createLLMGatewayApproval(input: $input) {
-        id approvalType status requiredApproverRole targetId requestedAt
-      }
-    }' "$variables" | jq -c '.createLLMGatewayApproval'
+# create_approval <approval_json> -> prints the created approval:
+# {id, approval_type, status, required_approver_role, target_id, requested_at, ...}
+create_approval() {
+  admin_api POST /v1/llm/approvals "" "$1"
 }
 
-# list_llm_gateway_approvals [status] [limit] -> prints a JSON array of
-# {id, approvalType, status, targetId, requestedAt, requiredApproverRole}
-# Both arguments are optional (status omitted/empty means "no filter", limit
-# defaults to 50) so calling this interactively after sourcing lib.sh - not
-# just from a script that always supplies both - doesn't hand jq an empty
-# string where it needs valid JSON.
-list_llm_gateway_approvals() {
-  local status="${1:-}" limit="${2:-50}" variables
-  variables=$(jq -n --arg status "$status" --argjson limit "$limit" \
-    '{status: (if $status == "" then null else $status end), limit: $limit, offset: null}')
-  graphql 'query ListApprovals($status: String, $limit: Int, $offset: Int) {
-      llmGatewayApprovals(status: $status, limit: $limit, offset: $offset) {
-        id approvalType status targetId requestedAt requiredApproverRole
-      }
-    }' "$variables" | jq -c '.llmGatewayApprovals'
+# list_approvals [query_json] -> prints {items, next_cursor}.
+# Query: status, search, limit, cursor.
+list_approvals() {
+  admin_api GET /v1/llm/approvals "${1:-}"
+}
+
+# list_session_steps <query_json> -> prints {agent_session_id, items, next_cursor}:
+# one item per request in the agent session, with request_id, provider, model,
+# status, input_tokens, output_tokens, cost_usd, requested_tool_names,
+# response_tool_names, and trace_sha256. Query: session_id (required), window,
+# limit, cursor.
+list_session_steps() {
+  admin_api GET /v1/llm/sessions/steps "$1"
+}
+
+# list_session_records <query_json> -> prints {agent_session_id, items, next_cursor}:
+# the session's retained trace records, each with its integrity verification.
+list_session_records() {
+  admin_api GET /v1/llm/sessions/records "$1"
 }
 
 RESP_BODY_FILE="$(mktemp)"
@@ -166,15 +183,15 @@ provision_app() {
   if [ -n "$profile_json" ]; then
     profile=$(create_guardrail_profile "$(jq -c --arg suffix "$SUFFIX" '.name += "-" + $suffix' <<<"$profile_json")")
     PROFILE_ID=$(jq -r '.id' <<<"$profile")
-    policy_json=$(jq -c --arg profileId "$PROFILE_ID" '.guardrailProfileId = $profileId' <<<"$policy_json")
+    policy_json=$(jq -c --arg profile_id "$PROFILE_ID" '.guardrail_profile_id = $profile_id' <<<"$policy_json")
   fi
   policy=$(create_policy "$(jq -c --arg suffix "$SUFFIX" '.name += "-" + $suffix' <<<"$policy_json")")
   POLICY_ID=$(jq -r '.id' <<<"$policy")
-  key=$(create_virtual_key "$(jq -n --arg name "vk-$APP_ID" --arg team "$TEAM_ID" --arg appId "$APP_ID" --arg env "$ENVIRONMENT" \
-    '{name: $name, teamId: $team, appId: $appId, environment: $env}')")
-  ACCESS_TOKEN=$(jq -r '.accessToken' <<<"$key")
-  create_binding "$(jq -n --arg policyId "$POLICY_ID" --arg team "$TEAM_ID" --arg appId "$APP_ID" --arg env "$ENVIRONMENT" \
-    '{policyId: $policyId, teamId: $team, appId: $appId, environment: $env, priority: 10, acknowledgeOverlap: true}')" >/dev/null
+  key=$(create_virtual_key "$(jq -n --arg name "vk-$APP_ID" --arg team "$TEAM_ID" --arg app_id "$APP_ID" --arg env "$ENVIRONMENT" \
+    '{name: $name, team_id: $team, app_id: $app_id, environment: $env}')")
+  ACCESS_TOKEN=$(jq -r '.access_token' <<<"$key")
+  create_binding "$(jq -n --arg policy_id "$POLICY_ID" --arg team "$TEAM_ID" --arg app_id "$APP_ID" --arg env "$ENVIRONMENT" \
+    '{policy_id: $policy_id, team_id: $team, app_id: $app_id, environment: $env, priority: 10, acknowledge_overlap: true}')" >/dev/null
 }
 
 # get_access <app> <policy_json> [guardrail_profile_json]

@@ -55,15 +55,15 @@ async function main() {
     policy: {
       name: 'knowledge-cache-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
-      exactCacheEnabled: true,
-      exactCacheMode: 'enforce',
-      exactCacheTtlSeconds: 3600,
-      semanticCacheEnabled: true,
-      semanticCacheMode: 'observe',
-      semanticCacheSimilarityThreshold: 0.85,
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
+      exact_cache_enabled: true,
+      exact_cache_mode: 'enforce',
+      exact_cache_ttl_seconds: 3600,
+      semantic_cache_enabled: true,
+      semantic_cache_mode: 'observe',
+      semantic_cache_similarity_threshold: 0.85,
     },
   });
 
@@ -113,7 +113,7 @@ async function main() {
   }
 
   console.log(`Evidence in Cloptima Console:`);
-  console.log(`  - Cache performance & hit ratios: ${CONSOLE.recommendations}`);
+  console.log(`  - Cache performance & savings: ${CONSOLE.spend}`);
   console.log(`  - Policies & cache configuration: ${CONSOLE.policies}`);
 }
 

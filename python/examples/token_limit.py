@@ -6,7 +6,7 @@ and protect against compute cost overruns pre-flight.
 Pattern:
 1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
 2. Case 1: Concise summary within token bounds -> admitted and generated.
-3. Case 2: Oversized generation violating maxOutputTokens cap -> blocked pre-flight.
+3. Case 2: Oversized generation violating max_output_tokens cap -> blocked pre-flight.
 4. Application catches the token boundary error and informs the caller.
 
 Run standalone:
@@ -31,10 +31,10 @@ def main() -> None:
         policy={
             "name": "token-limit-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
-            "maxOutputTokens": 100,  # the minimum allowed value is 64
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
+            "max_output_tokens": 100,  # the minimum allowed value is 64
         },
     )
 
@@ -64,7 +64,7 @@ def main() -> None:
     try:
         client.chat.completions.create(
             model=MODELS["default"],
-            # Requesting 500 tokens exceeds the policy's maxOutputTokens cap of 100
+            # Requesting 500 tokens exceeds the policy's max_output_tokens cap of 100
             max_tokens=500,
             messages=[{"role": "user", "content": oversized_prompt}],
         )

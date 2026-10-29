@@ -6,7 +6,7 @@ Every example needs one of these two credentials:
 
 | Variable | Notes |
 | --- | --- |
-| `CLOPTIMA_AI_ADMIN_KEY` | Management key (`ai:admin` + `ai:write` + `ai:read`). Creates policies, bindings, guardrail profiles, and inference virtual keys, and reads back reports. Cannot invoke inference itself - the example creates an inference-scoped (`ai:invoke`) virtual key from this and uses that for model calls. Required by every example that configures governance resources (approvals, MCP tool servers, prompts, price sheets, ROI, session audit). |
+| `CLOPTIMA_AI_ADMIN_KEY` | Management key (`ai:admin` + `ai:write` + `ai:read`). Creates policies, bindings, guardrail profiles, and inference virtual keys, and reads back reports. Cannot invoke inference itself - the example creates an inference-scoped (`ai:invoke`) virtual key from this and uses that for model calls. Required by every example that configures governance resources (approvals, MCP tool servers, price sheets, ROI, session audit). |
 | `CLOPTIMA_VIRTUAL_KEY` | An inference virtual key you already have. The examples that only exercise application behavior run with just this key, skipping their governance setup. The key must be bound to a policy like the one in the example's "Governance setup" block. |
 
 Also, for the BYOK and Contract Pricing examples (or set `CLOPTIMA_PROVIDER_CREDENTIAL_ID` to a credential already registered in the Console):
@@ -21,7 +21,7 @@ The gateway URL itself is not something you set - it's hardcoded to the producti
 
 ### A note on User-Agent
 
-The gateway sits behind Cloudflare, which bot-manages requests carrying no or generic User-Agent strings - a bare `curl`, unconfigured Node `fetch`, or default `python-requests` signature can get blocked at the network edge before the request ever reaches the application. The official `openai`/`anthropic` SDKs already send their own identifying UA, so this only matters for this repo's own raw HTTP calls (GraphQL policy/key/binding creation, and the few examples - such as `unit-economics-roi` - that call ingest endpoints directly instead of through an SDK client). Every raw call in this repo already sets a `Cloptima-AI-Gateway-Examples/1.0` User-Agent - see `USER_AGENT`/`config.USER_AGENT` in each language's `config` module. If you write your own raw HTTP call against the gateway, do the same.
+The gateway sits behind Cloudflare, which bot-manages requests carrying no or generic User-Agent strings - a bare `curl`, unconfigured Node `fetch`, or default `python-requests` signature can get blocked at the network edge before the request ever reaches the application. The official `openai`/`anthropic` SDKs already send their own identifying UA, so this only matters for this repo's own raw HTTP calls (the REST calls that create policies, keys, and bindings, and the few examples - such as `unit-economics-roi` - that call ingest endpoints directly instead of through an SDK client). Every raw call in this repo already sets a `Cloptima-AI-Gateway-Examples/1.0` User-Agent - see `USER_AGENT`/`config.USER_AGENT` in each language's `config` module. If you write your own raw HTTP call against the gateway, do the same.
 
 ## Managed-gateway request headers
 

@@ -34,13 +34,11 @@ def resolve_provider_credential_id() -> str:
     suffix = config.run_suffix()
     name = f"byok-demo-{suffix}"
     print(f"Registering customer-owned OpenAI credential ({name})...")
-    data = gateway_admin.graphql(
-        """mutation CreateCred($input: CreateLLMProviderCredentialInput!) {
-          createLLMProviderCredential(input: $input) { id displayName provider }
-        }""",
-        {"input": {"displayName": name, "provider": "openai", "apiKey": api_key}},
+    created = gateway_admin.admin_api(
+        "POST",
+        "/v1/llm/provider-credentials",
+        body={"display_name": name, "provider": "openai", "api_key": api_key},
     )
-    created = data["createLLMProviderCredential"]
     print(f"Registered credential: {created['id']}")
     return created["id"]
 
@@ -58,9 +56,9 @@ def main() -> None:
         policy={
             "name": "byok-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["openai"],
-            "allowedModels": ["openai/gpt-4o-mini"],
+            "budget_mode": "hard",
+            "allowed_providers": ["openai"],
+            "allowed_models": ["openai/gpt-4o-mini"],
         },
     )
 

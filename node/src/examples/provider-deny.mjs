@@ -6,7 +6,7 @@
  * catches and recovers from unauthorized provider requests.
  *
  * Pattern:
- * 1. Policy enforces allowedProviders: ['vertex_ai'].
+ * 1. Policy enforces allowed_providers: ['vertex_ai'].
  * 2. Application attempts calling an unauthorized provider (e.g. openai/gpt-4o).
  * 3. Gateway blocks before provider egress (HTTP 403).
  * 4. Application catches the block and falls back to an authorized model.
@@ -30,9 +30,9 @@ async function main() {
     policy: {
       name: 'provider-boundary-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
     },
   });
 

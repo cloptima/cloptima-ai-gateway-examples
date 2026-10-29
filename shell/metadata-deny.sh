@@ -2,7 +2,7 @@
 # FinOps attribution: a policy that requires team_id, app_id, and environment metadata.
 #
 # The script mints a virtual key deliberately WITHOUT team/app/environment and binds it by
-# principalId, the only way to produce a genuine missing-attribution block: a key with baked-in
+# principal_id, the only way to produce a genuine missing-attribution block: a key with baked-in
 # team/app/environment is trusted as an attribution fallback when headers are absent. Calling with
 # no headers is refused with HTTP 400. Calling with the x-cloptima-team, x-cloptima-app, and
 # x-cloptima-environment headers is admitted and attributed.
@@ -31,14 +31,14 @@ else
   SUFFIX="$(run_suffix)"
   echo "Configuring a policy that requires team_id/app_id/environment metadata..."
   POLICY=$(create_policy "$(jq -n --arg name "attribution-policy-$SUFFIX" --arg model "$MODEL_DEFAULT" '{
-    name: $name, mode: "enforce", budgetMode: "hard",
-    allowedProviders: ["vertex_ai"], allowedModels: [$model],
+    name: $name, mode: "enforce", budget_mode: "hard",
+    allowed_providers: ["vertex_ai"], allowed_models: [$model],
     metadata: {required_metadata_keys: ["team_id", "app_id", "environment"]}}')")
   KEY=$(create_virtual_key "$(jq -n --arg name "vk-attribution-$SUFFIX" '{name: $name}')")
   KEY_ID=$(jq -r '.id' <<<"$KEY")
-  ACCESS_TOKEN=$(jq -r '.accessToken' <<<"$KEY")
-  create_binding "$(jq -n --arg policyId "$(jq -r '.id' <<<"$POLICY")" --arg principalId "$KEY_ID" \
-    '{policyId: $policyId, principalId: $principalId, actorType: "service", priority: 5, acknowledgeOverlap: true}')" >/dev/null
+  ACCESS_TOKEN=$(jq -r '.access_token' <<<"$KEY")
+  create_binding "$(jq -n --arg policy_id "$(jq -r '.id' <<<"$POLICY")" --arg principal_id "$KEY_ID" \
+    '{policy_id: $policy_id, principal_id: $principal_id, actor_type: "service", priority: 5, acknowledge_overlap: true}')" >/dev/null
   echo "Minted unscoped key $KEY_ID and bound it."
   echo ""
 fi

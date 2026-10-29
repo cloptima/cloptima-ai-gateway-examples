@@ -40,49 +40,36 @@ if [ -n "${CLOPTIMA_PROVIDER_CREDENTIAL_ID:-}" ]; then
   echo "Using registered provider credential ID: $CREDENTIAL_ID"
 elif [ -n "${PROVIDER_API_KEY:-}" ]; then
   echo "Registering a provider credential (BYOK)..."
-  CREATE_CREDENTIAL_VARS=$(jq -n --arg apiKey "$PROVIDER_API_KEY" --arg displayName "byok-openai-$SUFFIX" \
-    '{input: {provider: "openai", displayName: $displayName, apiKey: $apiKey}}')
-  CREATE_CREDENTIAL_RESULT=$(graphql 'mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
-    createLLMProviderCredential(input: $input) { id provider displayName }
-  }' "$CREATE_CREDENTIAL_VARS")
-  CREDENTIAL_ID=$(echo "$CREATE_CREDENTIAL_RESULT" | jq -r '.createLLMProviderCredential.id')
-  echo "  credential $CREDENTIAL_ID ($(echo "$CREATE_CREDENTIAL_RESULT" | jq -r '.createLLMProviderCredential.displayName'))"
+  CREDENTIAL=$(admin_api POST /v1/llm/provider-credentials "" "$(jq -n --arg api_key "$PROVIDER_API_KEY" --arg display_name "byok-openai-$SUFFIX" \
+    '{provider: "openai", display_name: $display_name, api_key: $api_key}')")
+  CREDENTIAL_ID=$(jq -r '.id' <<<"$CREDENTIAL")
+  echo "  credential $CREDENTIAL_ID ($(jq -r '.display_name' <<<"$CREDENTIAL"))"
 else
   echo "Set PROVIDER_API_KEY (or CLOPTIMA_PROVIDER_CREDENTIAL_ID) in .env (see .env.example)." >&2
   exit 1
 fi
 
 echo "Creating an illustrative enterprise price sheet (~20% off retail on $MODEL)..."
-PRICE_SHEET_VARS=$(jq -n --arg name "Enterprise volume agreement ($SUFFIX)" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
-{input: {name: $name, owner: "cloptima-ai-gateway-examples", effectiveStart: $start, effectiveEnd: $end}}')
-PRICE_SHEET=$(graphql 'mutation CreatePriceSheet($input: CreatePriceSheetInput!) { createPriceSheet(input: $input) { id name status } }' "$PRICE_SHEET_VARS")
-PRICE_SHEET_ID=$(echo "$PRICE_SHEET" | jq -r '.createPriceSheet.id')
-echo "  price sheet $(echo "$PRICE_SHEET" | jq -r '.createPriceSheet.name') -> $PRICE_SHEET_ID (status=$(echo "$PRICE_SHEET" | jq -r '.createPriceSheet.status'))"
+PRICE_SHEET=$(admin_api POST /v1/llm/pricing/sheets "" "$(jq -n --arg name "Enterprise volume agreement ($SUFFIX)" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
+{name: $name, owner: "cloptima-ai-gateway-examples", effective_start: $start, effective_end: $end}')")
+PRICE_SHEET_ID=$(jq -r '.id' <<<"$PRICE_SHEET")
+echo "  price sheet $(jq -r '.name' <<<"$PRICE_SHEET") -> $PRICE_SHEET_ID (status=$(jq -r '.status' <<<"$PRICE_SHEET"))"
 
 echo "Adding the negotiated rate override..."
-OVERRIDE_VARS=$(jq -n --arg priceSheetId "$PRICE_SHEET_ID" --arg provider "$PROVIDER" --arg model "$MODEL" \
-  --argjson inputRate "$CONTRACT_INPUT_RATE" --argjson outputRate "$CONTRACT_OUTPUT_RATE" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
-{priceSheetId: $priceSheetId, overrides: [{provider: $provider, model: $model, inputRatePerMillion: $inputRate, outputRatePerMillion: $outputRate, effectiveStart: $start, effectiveEnd: $end}]}')
-graphql 'mutation AddRateOverrides($priceSheetId: ID!, $overrides: [RateOverrideInput!]!) { addRateOverrides(priceSheetId: $priceSheetId, overrides: $overrides) { id provider model inputRatePerMillion outputRatePerMillion } }' \
-  "$OVERRIDE_VARS" >/dev/null
+admin_api POST "/v1/llm/pricing/sheets/$(urlencode "$PRICE_SHEET_ID")/overrides" "" "$(jq -n --arg provider "$PROVIDER" --arg model "$MODEL" \
+  --argjson input_rate "$CONTRACT_INPUT_RATE" --argjson output_rate "$CONTRACT_OUTPUT_RATE" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
+{overrides: [{provider: $provider, model: $model, input_rate_per_million: $input_rate, output_rate_per_million: $output_rate, effective_start: $start, effective_end: $end}]}')" >/dev/null
 
 echo "Approving the price sheet so it applies to real cost calculations..."
-graphql 'mutation ApprovePriceSheet($id: ID!) { approvePriceSheet(id: $id) { id status approvedAt } }' \
-  "$(jq -n --arg id "$PRICE_SHEET_ID" '{id: $id}')" >/dev/null
-
-echo "Logging a commitment against this agreement..."
-COMMITMENT_VARS=$(jq -n --arg name "Annual commitment ($SUFFIX)" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
-{input: {name: $name, type: "upfront", amountCents: "200000", currency: "USD", effectiveStart: $start, effectiveEnd: $end}}')
-graphql 'mutation CreateCommitment($input: CreateCommitmentInput!) { createCommitmentEntry(input: $input) { id name amountCents } }' \
-  "$COMMITMENT_VARS" >/dev/null
+admin_api POST "/v1/llm/pricing/sheets/$(urlencode "$PRICE_SHEET_ID")/approve" >/dev/null
 
 # Governance setup: a policy for the BYOK provider and model. Platform admins normally create it
 # once in the Console, Terraform, or CI.
 echo "Creating a policy + key..."
 TEAM_ID="Finance"; ENVIRONMENT="prod"
 provision_app "contract-pricing-demo" "$(jq -n --arg provider "$PROVIDER" --arg model "$CANONICAL_MODEL" '{
-  name: "contract-pricing-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: [$provider], allowedModels: [$model]}')"
+  name: "contract-pricing-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: [$provider], allowed_models: [$model]}')"
 
 # Application code: the credential header routes each call through your own provider account,
 # which is where the negotiated rates apply.
@@ -119,10 +106,12 @@ echo "Verifying the contracted rate actually applied (checking the finance dashb
 DASHBOARD=""
 for attempt in 1 2 3 4 5; do
   if [ "$attempt" -gt 1 ]; then sleep 2; fi
-  DASHBOARD_VARS=$(jq -n --arg startTime "$VERIFICATION_START" --arg endTime "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '{startTime: $startTime, endTime: $endTime}')
-  RESULT=$(graphql 'query Dashboard($startTime: DateTime!, $endTime: DateTime!) { llmFinanceDashboard(window: "custom", startTime: $startTime, endTime: $endTime) { retailCostUsd contractedCostUsd hasActiveContract } }' "$DASHBOARD_VARS")
-  DASHBOARD=$(echo "$RESULT" | jq -c 'select(.llmFinanceDashboard.hasActiveContract == true and (.llmFinanceDashboard.contractedCostUsd | tonumber) < (.llmFinanceDashboard.retailCostUsd | tonumber)) | .llmFinanceDashboard')
-  if [ -n "$DASHBOARD" ]; then break; fi
+  # A failed read is retried, like a dashboard that does not show the contract yet.
+  if RESULT=$(admin_api GET /v1/llm/finance/dashboard "$(jq -n --arg start_time "$VERIFICATION_START" --arg end_time "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    '{window: "custom", start_time: $start_time, end_time: $end_time}')" 2>/dev/null); then
+    DASHBOARD=$(jq -c 'select(.has_active_contract == true and .contracted_cost_usd != null and (.contracted_cost_usd | tonumber) < (.retail_cost_usd | tonumber))' <<<"$RESULT")
+    if [ -n "$DASHBOARD" ]; then break; fi
+  fi
 done
 
 if [ -z "$DASHBOARD" ]; then
@@ -130,8 +119,8 @@ if [ -z "$DASHBOARD" ]; then
   exit 1
 fi
 
-RETAIL_USD=$(echo "$DASHBOARD" | jq -r '.retailCostUsd')
-CONTRACTED_USD=$(echo "$DASHBOARD" | jq -r '.contractedCostUsd')
+RETAIL_USD=$(jq -r '.retail_cost_usd' <<<"$DASHBOARD")
+CONTRACTED_USD=$(jq -r '.contracted_cost_usd' <<<"$DASHBOARD")
 echo "  Confirmed: Finance dashboard shows real contracted cost \$$CONTRACTED_USD below retail cost \$$RETAIL_USD for this account."
 
 echo ""

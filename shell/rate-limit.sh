@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
-# Illustrative, not a platform minimum. Bounds: requestRateLimitPerMinute accepts 1-1,000,000.
+# Illustrative, not a platform minimum. Bounds: request_rate_limit_per_minute accepts 1-1,000,000.
 REQUEST_RATE_LIMIT_PER_MINUTE=20
 TASKS_TO_PROCESS=25
 MAX_RETRIES=3
@@ -26,8 +26,8 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "rate-limit-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson rate "$REQUEST_RATE_LIMIT_PER_MINUTE" '{
-  name: "rate-limit-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model], requestRateLimitPerMinute: $rate}')"
+  name: "rate-limit-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model], request_rate_limit_per_minute: $rate}')"
 
 # Application code: process each task, backing off and retrying on HTTP 429.
 process_task() {

@@ -19,20 +19,18 @@
  */
 import { openaiClient } from '../lib/client.mjs';
 import { provisionApp } from '../lib/access.mjs';
-import { graphql } from '../lib/gatewayAdmin.mjs';
+import { adminApi } from '../lib/gatewayAdmin.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 const ROUTE = '/v1/ai/chat/completions';
-const MODEL_FAMILY = MODELS.default;
+// A class approval names the model as the gateway records it: the model id
+// without its provider prefix (gemini-3.5-flash-lite).
+const MODEL_FAMILY = MODELS.default.split('/').pop();
 
-async function ensureClassApproval(appId) {
-  const { createLLMSemanticCacheClassApproval: approval } = await graphql(
-    `mutation CreateClassApproval($input: LLMSemanticCacheClassApprovalInput!) {
-      createLLMSemanticCacheClassApproval(input: $input) { id appId route modelFamily createdAt }
-    }`,
-    { input: { appId, route: ROUTE, modelFamily: MODEL_FAMILY, notes: 'semantic-cache-enforce example' } },
-  );
-  return approval;
+function ensureClassApproval(appId) {
+  return adminApi('POST', '/v1/llm/semantic-cache/class-approvals', {
+    body: { app_id: appId, route: ROUTE, model_family: MODEL_FAMILY, notes: 'semantic-cache-enforce example' },
+  });
 }
 
 async function queryWithLatency(client, prompt, label) {
@@ -64,18 +62,19 @@ async function main() {
     policy: {
       name: 'semantic-cache-enforce-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
-      promptRetentionMode: 'full',
-      exactCacheEnabled: true,
-      exactCacheMode: 'enforce',
-      semanticCacheEnabled: true,
-      semanticCacheMode: 'enforce',
-      applyImmediately: true,
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
+      exact_cache_enabled: true,
+      exact_cache_mode: 'enforce',
+      semantic_cache_enabled: true,
+      semantic_cache_mode: 'enforce',
+      semantic_cache_review_required: true,
+      apply_immediately: true,
     },
   });
-  // Semantic-cache enforce mode needs a class approval for this app, route, and model family.
+  // With semantic_cache_review_required, enforce mode serves a semantic hit only for an approved
+  // (app_id, route, model_family) class. Without one, would-be hits are recorded but not served.
   await ensureClassApproval(appId);
 
   // Application code: the official SDK, pointed at the gateway with a virtual key.

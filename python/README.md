@@ -65,7 +65,7 @@ Set one credential in `.env`:
 - `CLOPTIMA_AI_ADMIN_KEY`: the example runs its governance setup for you, then runs the application code. Works with every example.
 - `CLOPTIMA_VIRTUAL_KEY`: the example skips setup and runs only the application code with your key. Use it with the examples marked **Virtual key** below. The key must be bound to a policy like the one in the file's governance setup, or the scenario will not trigger.
 
-Some examples need more: `byok` and `contract_pricing` need `PROVIDER_API_KEY` (or `CLOPTIMA_PROVIDER_CREDENTIAL_ID`), and the managed guardrail examples need available managed credits.
+Some examples need more: `byok` and `contract_pricing` need `PROVIDER_API_KEY` (or `CLOPTIMA_PROVIDER_CREDENTIAL_ID`). The guardrail examples need the `llm_guardrail_enterprise` entitlement. Every other model call runs on Cloptima-managed credentials and needs available AI credits; Cloptima-managed content-safety scans are billed to the same credits.
 
 ## Handling gateway responses
 
@@ -73,9 +73,9 @@ When a control applies, the gateway returns a standard HTTP error that the SDK r
 
 ```json
 {
-  "error": "Request blocked by policy",
-  "reason": "guardrail_violation",
-  "violations": ["us_ssn"]
+  "error": "Your AI request was blocked because it matched a configured safety rule.",
+  "reason": "gateway_guardrail_blocked",
+  "violations": ["custom_employee_id"]
 }
 ```
 
@@ -110,7 +110,7 @@ except APIStatusError as err:
 | `python -m examples.quickstart_openai` | Virtual key | Chat completion and streaming with the OpenAI SDK. |
 | `python -m examples.quickstart_anthropic` | Virtual key | Messages and streaming with the Anthropic SDK. |
 | `python -m examples.multi_model` | Virtual key | Compare latency and token cost across models under one policy. |
-| `python -m examples.pii_guardrail` | Virtual key | Support bot blocks an SSN before it reaches the model and returns a friendly fallback. |
+| `python -m examples.pii_guardrail` | Virtual key | A guardrail profile redacts US personal data before it reaches the model provider and restores it in the answer; a custom rule blocks a message that carries an employee ID. |
 | `python -m examples.provider_deny` | Virtual key | Compliance policy blocks a non-approved provider; the app falls back to an approved model. |
 | `python -m examples.rate_limit` | Virtual key | Batch worker retries with exponential backoff on HTTP 429. |
 | `python -m examples.token_limit` | Virtual key | Summarization service handles an output-token cap. |
@@ -118,19 +118,16 @@ except APIStatusError as err:
 | `python -m examples.agentic_runaway` | Virtual key | Agent loop is stopped by the policy's loop-iteration and tool-retry caps. |
 | `python -m examples.exact_semantic_cache` | Virtual key | Latency and token savings from exact and semantic cache hits. |
 | `python -m examples.conversation_prompt_caching` | Virtual key | Provider prompt caching on a growing multi-turn conversation (OpenAI and Anthropic). |
-| `python -m examples.adaptive_routing` | Virtual key | Adaptive routing in observe mode across cheap, balanced, and strong model tiers. |
-| `python -m examples.guardrail_cost_governance` | Virtual key | Per-request cost cap on a managed guardrail scan. |
 | `python -m examples.metadata_deny` | Virtual key | Requests without team and app attribution are refused; attributed requests are admitted. With `CLOPTIMA_VIRTUAL_KEY`, use an unscoped key (no team or app baked in) bound to a policy that requires attribution. |
-| `python -m examples.guardrail_detector_categories` | Virtual key | One managed guardrail scan per run: Google Model Armor (default), Azure AI Content Safety, or Amazon Bedrock Guardrails. Choose with `GUARDRAIL_PROVIDER=google-model-armor\|azure-content-safety\|bedrock-guardrails`. |
+| `python -m examples.content_safety_guardrail` | Virtual key | Cloptima-managed content safety answers a normal request and blocks a prompt-injection attempt (requires available managed credits). |
 | `python -m examples.byok` | Virtual key + `CLOPTIMA_PROVIDER_CREDENTIAL_ID`, or admin key + `PROVIDER_API_KEY` | Route calls through your own provider credential. |
 | `python -m examples.semantic_cache_enforce` | Admin key | Enforce-mode semantic cache, including the class approval it needs. |
 | `python -m examples.unit_economics_roi` | Admin key | Cost-center and profit-center ROI from business-outcome headers and unit metrics. |
 | `python -m examples.contract_pricing` | Admin key + `PROVIDER_API_KEY` or `CLOPTIMA_PROVIDER_CREDENTIAL_ID` | Negotiated rate sheet versus retail cost on your own credentials. |
 | `python -m examples.approval_workflow` | Admin key | Budget-change request waits in the governance queue; a pre-authorized change applies immediately. |
-| `python -m examples.prompt_release_workflow` | Admin key | Prompt evaluation against a golden dataset and a quality-gated release. |
 | `python -m examples.mcp_tool_governance` | Admin key | Tool servers start disabled until reviewed; unregistered servers and disallowed tools are blocked. |
-| `python -m examples.session_trace_audit` | Admin key | Agent session with tool I/O capture and per-step integrity hashes (`traceSha256`). |
-| `python -m examples.cleanup` | Admin key | Delete the policies, keys, profiles, and datasets the examples created. |
+| `python -m examples.session_trace_audit` | Admin key | Agent session with tool I/O capture and per-step integrity hashes (`trace_sha256`). |
+| `python -m examples.cleanup` | Admin key | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, and ROI calibrations; archive price sheets; revoke keys and credentials; reject pending approvals. |
 
 ## Cleanup
 

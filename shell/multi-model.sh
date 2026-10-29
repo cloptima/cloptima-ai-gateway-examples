@@ -28,8 +28,8 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "multi-model-demo" "$(jq -n --argjson models "$(printf '%s\n' "${MODELS[@]}" | jq -R . | jq -s .)" '{
-  name: "multi-model-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: $models}')"
+  name: "multi-model-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: $models}')"
 
 # Application code: the same request against each model.
 PROMPT="Explain the difference between vertical and horizontal autoscaling in 2 sentences."
@@ -53,4 +53,3 @@ done
 
 echo "Compare aggregate cost and latency per model in the Cloptima Console:"
 echo "  - Explorer: $CONSOLE_SPEND"
-echo "  - Recommendations: $CONSOLE_RECOMMENDATIONS"

@@ -33,6 +33,15 @@ from lib.models import MODELS
 
 COST_CENTER_TYPE = "support_ticket_resolved"
 PROFIT_CENTER_TYPE = "checkout_upsell_accepted"
+REPORT_FIELDS = (
+    "bucket",
+    "unit_count",
+    "cost_per_unit_usd",
+    "margin_usd",
+    "net_roi_usd",
+    "calibrated_business_value_usd",
+    "missing_metadata",
+)
 
 
 def seed_roi_calibration(suffix: str) -> None:
@@ -40,19 +49,16 @@ def seed_roi_calibration(suffix: str) -> None:
     effective_end = now + timedelta(days=365)
 
     print(f'Configuring FinOps ROI calibration for "{COST_CENTER_TYPE}"...')
-    gateway_admin.graphql(
-        """mutation UpsertROI($input: UpsertROICalibrationInput!) {
-          upsertROICalibration(input: $input) { id }
-        }""",
-        {
-            "input": {
-                "transactionType": COST_CENTER_TYPE,
-                "valuePerSuccessCents": 800,  # $8.00 estimated business value
-                "preLlmBaselineCostCents": 350,  # $3.50 manual support handling cost
-                "owner": "cloptima-ai-gateway-examples",
-                "effectiveStart": now.isoformat(),
-                "effectiveEnd": effective_end.isoformat(),
-            }
+    gateway_admin.admin_api(
+        "POST",
+        "/v1/llm/roi/calibrations",
+        body={
+            "transaction_type": COST_CENTER_TYPE,
+            "value_per_success_cents": 800,  # $8.00 estimated business value
+            "pre_llm_baseline_cost_cents": 350,  # $3.50 manual support handling cost
+            "owner": "cloptima-ai-gateway-examples",
+            "effective_start": now.isoformat(),
+            "effective_end": effective_end.isoformat(),
         },
     )
 
@@ -97,15 +103,13 @@ def submit_unit_metrics(
 
 def fetch_unit_economics_report(unit_type: str) -> List[dict]:
     try:
-        report = gateway_admin.graphql(
-            """query UnitEconomics($unitType: String!, $groupBy: String!, $window: String) {
-              llmUnitEconomics(unitType: $unitType, groupBy: $groupBy, window: $window) {
-                rows { bucket unitCount costPerUnitUsd marginUsd netRoiUsd calibratedBusinessValueUsd missingMetadata }
-              }
-            }""",
-            {"unitType": unit_type, "groupBy": "app_id", "window": "30d"},
+        report = gateway_admin.admin_api(
+            "GET",
+            "/v1/llm/unit-economics",
+            query={"unit_type": unit_type, "group_by": "app_id", "window": "30d"},
         )
-        return (report.get("llmUnitEconomics") or {}).get("rows") or []
+        rows = next((result["rows"] for result in report["results"] if result["unit_type"] == unit_type), [])
+        return [{field: row.get(field) for field in REPORT_FIELDS} for row in rows]
     except Exception as err:
         print(f"  (Report aggregation pending: {err})")
         return []
@@ -122,9 +126,9 @@ def main() -> None:
         policy={
             "name": "unit-economics-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
         },
     )
     app_id = setup["app_id"]
@@ -196,7 +200,7 @@ def main() -> None:
                 business_transaction_unit_count=1,
                 business_outcome_status="accepted",
                 business_outcome_success=True,
-                business_value_cents=int(item["value_usd"] * 100),
+                business_value_cents=round(item["value_usd"] * 100),
             )
             response = client.chat.completions.create(
                 model=MODELS["default"],

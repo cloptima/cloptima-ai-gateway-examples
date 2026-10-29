@@ -21,8 +21,8 @@ echo ""
 # create it once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY
 # points at a key whose policy already matches.
 get_access "quickstart-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "quickstart-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
+  name: "quickstart-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model]}')"
 
 # Application code: a standard Messages API request.
 echo "--- 1. Standard Messages API Request ---"

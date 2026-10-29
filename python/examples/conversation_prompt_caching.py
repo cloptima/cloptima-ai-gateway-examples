@@ -113,9 +113,9 @@ def main() -> None:
         policy={
             "name": "coding-assistant-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
         },
     )
 
@@ -184,8 +184,7 @@ def main() -> None:
         print(f"Anthropic prompt caching check: {err}\n")
 
     print("Review prompt caching savings in Cloptima Console:")
-    print(f"  - Explorer: {CONSOLE['spend']}")
-    print(f"  - Recommendations: {CONSOLE['recommendations']}")
+    print(f"  - Spend Explorer: {CONSOLE['spend']}")
 
 
 if __name__ == "__main__":

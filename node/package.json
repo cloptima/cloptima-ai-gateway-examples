@@ -22,10 +22,7 @@
     "contract-pricing": "node src/examples/contract-pricing.mjs",
     "semantic-cache-enforce": "node src/examples/semantic-cache-enforce.mjs",
     "approval-workflow": "node src/examples/approval-workflow.mjs",
-    "guardrail-detector-categories": "node src/examples/guardrail-detector-categories.mjs",
-    "guardrail-cost-governance": "node src/examples/guardrail-cost-governance.mjs",
-    "adaptive-routing": "node src/examples/adaptive-routing.mjs",
-    "prompt-release-workflow": "node src/examples/prompt-release-workflow.mjs",
+    "content-safety-guardrail": "node src/examples/content-safety-guardrail.mjs",
     "mcp-tool-governance": "node src/examples/mcp-tool-governance.mjs",
     "session-trace-audit": "node src/examples/session-trace-audit.mjs",
     "cleanup": "node src/examples/cleanup.mjs"

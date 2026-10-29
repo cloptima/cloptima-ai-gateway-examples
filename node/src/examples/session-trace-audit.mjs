@@ -10,18 +10,15 @@
  * without storing sensitive conversational user text.
  *
  * Cloptima provides:
- * 1. Selective Prompt Retention (promptRetentionMode: 'tool_io'): Tool calls, arguments,
+ * 1. Selective Prompt Retention (prompt_retention_mode: 'tool_io'): Tool calls, arguments,
  *    and results are captured verbatim for compliance, while user chat text is omitted.
  * 2. Cryptographic Session Ledger: Every step in an agent session is correlated via
- *    'x-cloptima-agent-session-id' and anchored with a SHA-256 integrity hash (traceSha256).
+ *    'x-cloptima-agent-session-id' and anchored with a SHA-256 integrity hash (trace_sha256).
  */
 import { openaiClient } from '../lib/client.mjs';
 import { provisionApp } from '../lib/access.mjs';
 import { runSuffix } from '../lib/config.mjs';
-import {
-  getLlmAgentSession,
-  getLlmAgentSessionRecords,
-} from '../lib/gatewayAdmin.mjs';
+import { listSessionSteps, listSessionRecords } from '../lib/gatewayAdmin.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -94,10 +91,10 @@ async function main() {
     policy: {
       name: 'session-trace-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
-      promptRetentionMode: 'tool_io', // capture tool calls and results, omit user chat text
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
+      prompt_retention_mode: 'tool_io', // capture tool calls and results, omit user chat text
     },
   });
 
@@ -189,30 +186,30 @@ async function main() {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     if (attempt > 0) await sleep(1000);
     try {
-      session = await getLlmAgentSession({ sessionId: agentSessionId });
-      const steps = session?.steps || [];
-      if (steps.length >= turnCount && steps.every((s) => s.traceSha256)) break;
+      session = await listSessionSteps({ session_id: agentSessionId });
+      const steps = session?.items || [];
+      if (steps.length >= turnCount && steps.every((s) => s.trace_sha256)) break;
     } catch {
       // Retry for ledger entry to flush
     }
   }
 
-  const steps = session?.steps || [];
-  console.log(`Session Correlated: ${session?.agentSessionId || agentSessionId} (${steps.length} steps recorded)`);
+  const steps = session?.items || [];
+  console.log(`Session Correlated: ${session?.agent_session_id || agentSessionId} (${steps.length} steps recorded)`);
   for (const [index, step] of steps.entries()) {
     console.log(`\n  Step ${index + 1}:`);
-    console.log(`    Request ID:    ${step.requestId}`);
+    console.log(`    Request ID:    ${step.request_id}`);
     console.log(`    Provider/Model: ${step.provider} / ${step.model}`);
-    console.log(`    Status:        ${step.status} (${step.inputTokens} in / ${step.outputTokens} out, cost: $${step.costUsd})`);
-    console.log(`    Invoked Tool:  ${step.responseToolNames?.join(', ') || 'none'}`);
-    console.log(`    Trace SHA-256: ${step.traceSha256 || 'none'}`);
+    console.log(`    Status:        ${step.status} (${step.input_tokens} in / ${step.output_tokens} out, cost: $${step.cost_usd})`);
+    console.log(`    Invoked Tool:  ${step.response_tool_names?.join(', ') || 'none'}`);
+    console.log(`    Trace SHA-256: ${step.trace_sha256 || 'none'}`);
   }
 
-  const recordsData = await getLlmAgentSessionRecords({ sessionId: agentSessionId });
-  const records = recordsData?.records || [];
+  const recordsData = await listSessionRecords({ session_id: agentSessionId });
+  const records = recordsData?.items || [];
   console.log(`\nVerified tamper-evident records: ${records.length} tool trace items anchored to ledger.`);
   for (const rec of records) {
-    console.log(`  Request ${rec.requestId} -> verification: ${rec.verification}`);
+    console.log(`  Request ${rec.request_id} -> verification: ${rec.verification}`);
   }
 }
 

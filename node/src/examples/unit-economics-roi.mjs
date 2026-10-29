@@ -20,12 +20,17 @@
 import { openaiClient } from '../lib/client.mjs';
 import { provisionApp } from '../lib/access.mjs';
 import { config, runSuffix, USER_AGENT } from '../lib/config.mjs';
-import { graphql } from '../lib/gatewayAdmin.mjs';
+import { adminApi } from '../lib/gatewayAdmin.mjs';
 import { attributionHeaders } from '../lib/attribution.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 const COST_CENTER_TYPE = 'support_ticket_resolved';
 const PROFIT_CENTER_TYPE = 'checkout_upsell_accepted';
+
+// The report fields this example prints. Each row carries more.
+const REPORT_FIELDS = [
+  'bucket', 'unit_count', 'cost_per_unit_usd', 'margin_usd', 'net_roi_usd', 'calibrated_business_value_usd', 'missing_metadata',
+];
 
 async function seedRoiCalibration(suffix) {
   const now = new Date();
@@ -33,19 +38,17 @@ async function seedRoiCalibration(suffix) {
   effectiveEnd.setUTCFullYear(effectiveEnd.getUTCFullYear() + 1);
 
   console.log(`Configuring FinOps ROI calibration for "${COST_CENTER_TYPE}"...`);
-  await graphql(
-    `mutation UpsertROI($input: UpsertROICalibrationInput!) { upsertROICalibration(input: $input) { id } }`,
-    {
-      input: {
-        transactionType: COST_CENTER_TYPE,
-        valuePerSuccessCents: 800,        // $8.00 estimated business value
-        preLlmBaselineCostCents: 350,     // $3.50 manual support handling cost
-        owner: 'cloptima-ai-gateway-examples',
-        effectiveStart: now.toISOString(),
-        effectiveEnd: effectiveEnd.toISOString(),
-      },
+  // Each call records the transaction type's next calibration version.
+  await adminApi('POST', '/v1/llm/roi/calibrations', {
+    body: {
+      transaction_type: COST_CENTER_TYPE,
+      value_per_success_cents: 800,        // $8.00 estimated business value
+      pre_llm_baseline_cost_cents: 350,    // $3.50 manual support handling cost
+      owner: 'cloptima-ai-gateway-examples',
+      effective_start: now.toISOString(),
+      effective_end: effectiveEnd.toISOString(),
     },
-  );
+  });
 }
 
 async function submitUnitMetrics({ unitType, unitCount, successCount, windowStart, windowEnd, teamId, appId, transactionType, revenueUsd }) {
@@ -76,15 +79,11 @@ async function submitUnitMetrics({ unitType, unitCount, successCount, windowStar
 
 async function fetchUnitEconomicsReport(unitType) {
   try {
-    const report = await graphql(
-      `query UnitEconomics($unitType: String!, $groupBy: String!, $window: String) {
-        llmUnitEconomics(unitType: $unitType, groupBy: $groupBy, window: $window) {
-          rows { bucket unitCount costPerUnitUsd marginUsd netRoiUsd calibratedBusinessValueUsd missingMetadata }
-        }
-      }`,
-      { unitType, groupBy: 'app_id', window: '30d' },
-    );
-    return report?.llmUnitEconomics?.rows || [];
+    const report = await adminApi('GET', '/v1/llm/unit-economics', {
+      query: { unit_type: unitType, group_by: 'app_id', window: '30d' },
+    });
+    const rows = report?.results?.find((result) => result.unit_type === unitType)?.rows || [];
+    return rows.map((row) => Object.fromEntries(REPORT_FIELDS.map((field) => [field, row[field]])));
   } catch (err) {
     console.log(`  (Report aggregation pending: ${err.message})`);
     return [];
@@ -102,9 +101,9 @@ async function main() {
     policy: {
       name: 'unit-economics-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
     },
   });
 

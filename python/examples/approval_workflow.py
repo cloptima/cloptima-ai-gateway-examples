@@ -25,10 +25,10 @@ def main() -> None:
         policy={
             "name": "governance-approval-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
-            "dailyBudgetUsd": CURRENT_DAILY_BUDGET_USD,
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
+            "daily_budget_usd": CURRENT_DAILY_BUDGET_USD,
         },
     )
     policy = setup["policy"]
@@ -49,21 +49,20 @@ def main() -> None:
         print(f"Baseline query failed: {err}")
 
     print(f"\nSubmitting governance change request to raise daily budget to ${REQUESTED_DAILY_BUDGET_USD}...")
-    approval = gateway_admin.create_llm_gateway_approval({
-        "approvalType": "budget_limit_change",
-        "targetId": policy["id"],
-        "requestedChange": {"daily_budget_usd": REQUESTED_DAILY_BUDGET_USD},
-        "affectedApps": [app_id],
-        "affectedRoutes": ["/v1/ai/chat/completions"],
-        "expectedCostImpactCents": (REQUESTED_DAILY_BUDGET_USD - CURRENT_DAILY_BUDGET_USD) * 100,
-        "expectedRiskReduction": "none - planned capacity increase for Q4 peak load",
-        "metadata": {"requestedBy": "AI Platform Engineering", "reason": "Capacity expansion"},
+    approval = gateway_admin.create_approval({
+        "approval_type": "budget_limit_change",
+        "target_id": policy["id"],
+        "requested_change": {"daily_budget_usd": REQUESTED_DAILY_BUDGET_USD},
+        "affected_apps": [app_id],
+        "affected_routes": ["/v1/ai/chat/completions"],
+        "expected_cost_impact_cents": (REQUESTED_DAILY_BUDGET_USD - CURRENT_DAILY_BUDGET_USD) * 100,
+        "expected_risk_reduction": "none - planned capacity increase for Q4 peak load",
     })
     print(f"Change request submitted: ID {approval['id']} (Status: {approval['status']})")
 
     print("\nInspecting enterprise governance queue...")
-    pending = gateway_admin.list_llm_gateway_approvals(status="pending", limit=50)
-    pending_match = next((a for a in pending if a["id"] == approval["id"]), None)
+    pending = gateway_admin.list_approvals({"status": "pending", "limit": 50})
+    pending_match = next((a for a in pending["items"] if a["id"] == approval["id"]), None)
     if pending_match:
         print(f"Approval queue entry: ID {pending_match['id']} is pending secondary review.")
         print("Production safety: Existing $5.00 limit remains active until administrator approval.")
@@ -80,17 +79,16 @@ def main() -> None:
     except Exception as err:
         print(f"Post-request query failed: {err}")
 
-    print("\nDemonstrating automated CI/CD approval with pre-authorized identity (applyImmediately: true)...")
-    automated = gateway_admin.create_llm_gateway_approval({
-        "approvalType": "budget_limit_change",
-        "targetId": policy["id"],
-        "requestedChange": {"daily_budget_usd": REQUESTED_DAILY_BUDGET_USD + 10},
-        "affectedApps": [app_id],
-        "affectedRoutes": ["/v1/ai/chat/completions"],
-        "expectedCostImpactCents": (REQUESTED_DAILY_BUDGET_USD + 10 - CURRENT_DAILY_BUDGET_USD) * 100,
-        "expectedRiskReduction": "pre-authorized CI/CD deployment",
-        "metadata": {"requestedBy": "CI/CD Pipeline"},
-        "applyImmediately": True,
+    print("\nDemonstrating automated CI/CD approval with pre-authorized identity (apply_immediately: true)...")
+    automated = gateway_admin.create_approval({
+        "approval_type": "budget_limit_change",
+        "target_id": policy["id"],
+        "requested_change": {"daily_budget_usd": REQUESTED_DAILY_BUDGET_USD + 10},
+        "affected_apps": [app_id],
+        "affected_routes": ["/v1/ai/chat/completions"],
+        "expected_cost_impact_cents": (REQUESTED_DAILY_BUDGET_USD + 10 - CURRENT_DAILY_BUDGET_USD) * 100,
+        "expected_risk_reduction": "pre-authorized CI/CD deployment",
+        "apply_immediately": True,
     })
     print(f"Automated approval result: ID {automated['id']} (Status: {automated['status']})")
     print("Governance state: Applied immediately, policy daily budget updated live.")

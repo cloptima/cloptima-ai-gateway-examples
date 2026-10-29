@@ -27,11 +27,9 @@ if [ -n "${CLOPTIMA_PROVIDER_CREDENTIAL_ID:-}" ]; then
   echo "Using registered provider credential ID: $CREDENTIAL_ID"
 elif [ -n "${PROVIDER_API_KEY:-}" ]; then
   echo "Registering your provider credential (BYOK)..."
-  CREDENTIAL=$(graphql 'mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
-    createLLMProviderCredential(input: $input) { id provider displayName }
-  }' "$(jq -n --arg apiKey "$PROVIDER_API_KEY" --arg displayName "byok-openai-$(run_suffix)" \
-    '{input: {provider: "openai", displayName: $displayName, apiKey: $apiKey}}')")
-  CREDENTIAL_ID=$(jq -r '.createLLMProviderCredential.id' <<<"$CREDENTIAL")
+  CREDENTIAL=$(admin_api POST /v1/llm/provider-credentials "" "$(jq -n --arg api_key "$PROVIDER_API_KEY" --arg display_name "byok-openai-$(run_suffix)" \
+    '{provider: "openai", display_name: $display_name, api_key: $api_key}')")
+  CREDENTIAL_ID=$(jq -r '.id' <<<"$CREDENTIAL")
   echo "Registered credential: $CREDENTIAL_ID"
 else
   echo "Set PROVIDER_API_KEY (or CLOPTIMA_PROVIDER_CREDENTIAL_ID) in .env (see .env.example)." >&2
@@ -43,8 +41,8 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "byok-demo" "$(jq -n --arg model "$BYOK_MODEL" '{
-  name: "byok-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["openai"], allowedModels: [$model]}')"
+  name: "byok-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["openai"], allowed_models: [$model]}')"
 
 # Application code: the credential header routes the call through your own provider account.
 echo "Sending a query through the Cloptima Gateway under the BYOK credential..."

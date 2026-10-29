@@ -11,15 +11,12 @@
  * 3. The request enters the governance queue with status 'pending'. Active application
  *    traffic continues to run without disruption under the existing policy.
  * 4. Enterprise administrators review and approve pending requests in the Cloptima
- *    Console or through authorized CI/CD automation (applyImmediately: true), activating
+ *    Console or through authorized CI/CD automation (apply_immediately: true), activating
  *    the new budget limit live.
  */
 import { openaiClient } from '../lib/client.mjs';
 import { provisionApp } from '../lib/access.mjs';
-import {
-  createLLMGatewayApproval,
-  listLLMGatewayApprovals,
-} from '../lib/gatewayAdmin.mjs';
+import { createApproval, listApprovals } from '../lib/gatewayAdmin.mjs';
 import { MODELS } from '../lib/models.mjs';
 
 const CURRENT_DAILY_BUDGET_USD = 5;
@@ -34,10 +31,10 @@ async function main() {
     policy: {
       name: 'governance-approval-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
-      dailyBudgetUsd: CURRENT_DAILY_BUDGET_USD,
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
+      daily_budget_usd: CURRENT_DAILY_BUDGET_USD,
     },
   });
 
@@ -58,21 +55,20 @@ async function main() {
   }
 
   console.log(`\nSubmitting governance change request to raise daily budget to $${REQUESTED_DAILY_BUDGET_USD}...`);
-  const approval = await createLLMGatewayApproval({
-    approvalType: 'budget_limit_change',
-    targetId: policy.id,
-    requestedChange: { daily_budget_usd: REQUESTED_DAILY_BUDGET_USD },
-    affectedApps: [appId],
-    affectedRoutes: ['/v1/ai/chat/completions'],
-    expectedCostImpactCents: (REQUESTED_DAILY_BUDGET_USD - CURRENT_DAILY_BUDGET_USD) * 100,
-    expectedRiskReduction: 'none - planned capacity increase for Q4 peak load',
-    metadata: { requestedBy: 'AI Platform Engineering', reason: 'Capacity expansion' },
+  const approval = await createApproval({
+    approval_type: 'budget_limit_change',
+    target_id: policy.id,
+    requested_change: { daily_budget_usd: REQUESTED_DAILY_BUDGET_USD },
+    affected_apps: [appId],
+    affected_routes: ['/v1/ai/chat/completions'],
+    expected_cost_impact_cents: (REQUESTED_DAILY_BUDGET_USD - CURRENT_DAILY_BUDGET_USD) * 100,
+    expected_risk_reduction: 'none - planned capacity increase for Q4 peak load',
   });
   console.log(`Change request submitted: ID ${approval.id} (Status: ${approval.status})`);
 
   console.log('\nInspecting enterprise governance queue...');
-  const pending = await listLLMGatewayApprovals({ status: 'pending', limit: 50 });
-  const pendingMatch = pending.find((a) => a.id === approval.id);
+  const pending = await listApprovals({ status: 'pending', limit: 50 });
+  const pendingMatch = pending.items.find((a) => a.id === approval.id);
   if (pendingMatch) {
     console.log(`Approval queue entry: ID ${pendingMatch.id} is pending secondary review.`);
     console.log('Production safety: Existing $5.00 limit remains active until administrator approval.');
@@ -90,17 +86,16 @@ async function main() {
     console.error('Post-request query failed:', err?.message || err);
   }
 
-  console.log('\nDemonstrating automated CI/CD approval with pre-authorized identity (applyImmediately: true)...');
-  const automatedApproval = await createLLMGatewayApproval({
-    approvalType: 'budget_limit_change',
-    targetId: policy.id,
-    requestedChange: { daily_budget_usd: REQUESTED_DAILY_BUDGET_USD + 10 },
-    affectedApps: [appId],
-    affectedRoutes: ['/v1/ai/chat/completions'],
-    expectedCostImpactCents: (REQUESTED_DAILY_BUDGET_USD + 10 - CURRENT_DAILY_BUDGET_USD) * 100,
-    expectedRiskReduction: 'pre-authorized CI/CD deployment',
-    metadata: { requestedBy: 'CI/CD Pipeline' },
-    applyImmediately: true,
+  console.log('\nDemonstrating automated CI/CD approval with pre-authorized identity (apply_immediately: true)...');
+  const automatedApproval = await createApproval({
+    approval_type: 'budget_limit_change',
+    target_id: policy.id,
+    requested_change: { daily_budget_usd: REQUESTED_DAILY_BUDGET_USD + 10 },
+    affected_apps: [appId],
+    affected_routes: ['/v1/ai/chat/completions'],
+    expected_cost_impact_cents: (REQUESTED_DAILY_BUDGET_USD + 10 - CURRENT_DAILY_BUDGET_USD) * 100,
+    expected_risk_reduction: 'pre-authorized CI/CD deployment',
+    apply_immediately: true,
   });
   console.log(`Automated approval result: ID ${automatedApproval.id} (Status: ${automatedApproval.status})`);
   console.log('Governance state: Applied immediately, policy daily budget updated live.');

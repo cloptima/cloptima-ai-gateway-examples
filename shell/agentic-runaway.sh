@@ -3,8 +3,8 @@
 # the tool-call transcript already present in each request body, so no client-side tracking or
 # session identifiers are needed.
 #
-# - maxLoopIterations: completed tool-result turns in the conversation so far.
-# - maxRetryCount: scoped per tool_call_id, so retrying one call and starting a different call
+# - max_loop_iterations: completed tool-result turns in the conversation so far.
+# - max_retry_count: scoped per tool_call_id, so retrying one call and starting a different call
 #   are counted independently.
 #
 # Auth: CLOPTIMA_VIRTUAL_KEY (runs only the application code) or CLOPTIMA_AI_ADMIN_KEY
@@ -42,9 +42,9 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "agent-loop-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson loop "$MAX_LOOP_ITERATIONS" --argjson retry "$MAX_RETRY_COUNT" '{
-  name: "agent-loop-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model],
-  maxLoopIterations: $loop, maxRetryCount: $retry}')"
+  name: "agent-loop-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model],
+  max_loop_iterations: $loop, max_retry_count: $retry}')"
 
 # Application code: one chat-completions turn with a growing transcript.
 agent_turn() {
@@ -58,7 +58,7 @@ agent_turn() {
       + (if $choice == "force" then {tool_choice: {type: "function", function: {name: "check_status"}}} else {} end)')")
 }
 
-echo "--- Case 1: Runaway Tool Loop (maxLoopIterations=$MAX_LOOP_ITERATIONS) ---"
+echo "--- Case 1: Runaway Tool Loop (max_loop_iterations=$MAX_LOOP_ITERATIONS) ---"
 MESSAGES='[{"role": "user", "content": "Call check_status for job \"job-42\" and keep checking until it is done."}]'
 for turn in $(seq 1 $((MAX_LOOP_ITERATIONS + 2))); do
   echo "[Turn $turn] Agent requesting tool invocation..."
@@ -81,7 +81,7 @@ for turn in $(seq 1 $((MAX_LOOP_ITERATIONS + 2))); do
 done
 
 echo ""
-echo "--- Case 2: Repeated Retry of a Single Tool Call (maxRetryCount=$MAX_RETRY_COUNT) ---"
+echo "--- Case 2: Repeated Retry of a Single Tool Call (max_retry_count=$MAX_RETRY_COUNT) ---"
 retry_transcript() {
   local call_id="$1"
   jq -nc --arg id "$call_id" '[

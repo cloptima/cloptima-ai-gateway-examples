@@ -8,7 +8,7 @@
  * 1. Initialize official OpenAI SDK with Cloptima gateway URL & virtual key.
  * 2. Agent enters a multi-turn tool calling loop checking job status.
  * 3. Gateway monitors conversation tool transcripts in real time.
- * 4. When the loop exceeds the policy maxLoopIterations cap, gateway denies further turns (HTTP 403).
+ * 4. When the loop exceeds the policy max_loop_iterations cap, gateway denies further turns (HTTP 403).
  * 5. Application safely terminates the agent loop and returns control to the user.
  *
  * Run standalone:
@@ -43,11 +43,11 @@ async function main() {
     policy: {
       name: 'agent-loop-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
-      maxLoopIterations: 3,
-      maxRetryCount: 2,
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
+      max_loop_iterations: 3,
+      max_retry_count: 2,
     },
   });
 
@@ -104,7 +104,7 @@ async function main() {
     }
   }
 
-  // --- Case 2: Repeated Retry Protection on Single Tool Call (maxRetryCount) ---
+  // --- Case 2: Repeated Retry Protection on Single Tool Call (max_retry_count) ---
   console.log('--- Case 2: Repeated Retry Protection on a Single Tool Call ---');
   console.log('Resubmitting results for tool_call_id "call-job-99" (max 2 retries allowed)...\n');
 

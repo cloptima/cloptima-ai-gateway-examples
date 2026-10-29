@@ -2,10 +2,9 @@
  * Automated cleanup script for Cloptima AI gateway example resources.
  *
  * WARNING: This script permanently deletes every AI gateway policy, policy
- * binding, guardrail profile, registered tool server, eval dataset, and ROI
- * calibration in the authenticated account. It also archives prompt templates
- * and price sheets, revokes all active virtual keys and provider credentials,
- * and rejects all pending approvals.
+ * binding, guardrail profile, registered tool server, and ROI calibration in
+ * the authenticated account. It also archives price sheets, revokes all active
+ * virtual keys and provider credentials, and rejects all pending approvals.
  *
  * Intended for sandbox, testing, or demo environments to clean up resources
  * before or after evaluating example scripts.
@@ -18,30 +17,38 @@
 
 import readline from 'node:readline';
 import { config } from '../lib/config.mjs';
-import { graphql } from '../lib/gatewayAdmin.mjs';
+import { adminApi } from '../lib/gatewayAdmin.mjs';
 
 const isForce = process.argv.includes('--force') ||
   process.argv.includes('-y') ||
   process.env.CI === 'true' ||
   process.env.NONINTERACTIVE === 'true';
 
-const INVENTORY_QUERY = `
-  query GetCleanupInventory {
-    llmGatewayControlPlane {
-      bindings { id policyId teamId appId }
-      policies { id name }
-      keys { id name status }
-      credentials { id displayName status }
-      toolServers { id name }
-    }
-    llmGuardrailProfiles { id name }
-    llmGatewayApprovals(status: "pending", limit: 100) { id approvalType status }
-    llmPromptTemplates(limit: 100) { id name }
-    llmDatasets(limit: 100) { id name }
-    llmContractPriceSheets { id name status }
-    llmROICalibrations { id }
+const PAGE_SIZE = 100;
+
+// Reads every page of a cursor-paged list.
+async function listAll(path, query = {}) {
+  const items = [];
+  let cursor;
+  do {
+    const page = await adminApi('GET', path, { query: { ...query, limit: PAGE_SIZE, cursor } });
+    items.push(...page.items);
+    cursor = page.next_cursor;
+  } while (cursor);
+  return items;
+}
+
+// Virtual keys page by offset.
+async function listActiveKeys() {
+  const items = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const page = await adminApi('GET', '/v1/llm/gateway-keys', { query: { status: 'active', limit: PAGE_SIZE, offset } });
+    items.push(...page.items);
+    if (!page.has_more) return items;
   }
-`;
+}
+
+const remove = (path) => (item) => adminApi('DELETE', `${path}/${encodeURIComponent(item.id)}`);
 
 // Each step removes one resource type. Order matters: bindings go before the
 // policies they reference, and policies go before the guardrail profiles they
@@ -49,70 +56,71 @@ const INVENTORY_QUERY = `
 const STEPS = [
   {
     label: 'policy binding(s)',
-    items: (d) => d.llmGatewayControlPlane.bindings,
-    run: (item) => graphql('mutation($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }', { id: item.id }),
+    list: () => listAll('/v1/llm/policy-bindings'),
+    run: remove('/v1/llm/policy-bindings'),
   },
   {
     label: 'policy/policies',
-    items: (d) => d.llmGatewayControlPlane.policies,
-    run: (item) => graphql('mutation($id: ID!) { deleteLLMGatewayPolicy(id: $id) }', { id: item.id }),
+    list: () => listAll('/v1/llm/policies'),
+    run: remove('/v1/llm/policies'),
   },
   {
     label: 'guardrail profile(s)',
-    items: (d) => d.llmGuardrailProfiles,
-    run: (item) => graphql('mutation($id: ID!) { deleteLLMGuardrailProfile(id: $id) }', { id: item.id }),
+    list: () => listAll('/v1/llm/guardrail-profiles'),
+    run: remove('/v1/llm/guardrail-profiles'),
   },
   {
     label: 'tool server(s)',
-    items: (d) => d.llmGatewayControlPlane.toolServers,
-    run: (item) => graphql('mutation($id: ID!) { deleteLLMGatewayToolServer(id: $id) }', { id: item.id }),
+    list: () => listAll('/v1/llm/tool-servers'),
+    run: remove('/v1/llm/tool-servers'),
   },
   {
     label: 'active virtual key(s)',
     verb: 'Revoked',
-    items: (d) => d.llmGatewayControlPlane.keys.filter((k) => k.status !== 'revoked'),
-    run: (item) => graphql('mutation($id: ID!) { revokeLLMGatewayKey(id: $id) }', { id: item.id }),
+    list: listActiveKeys,
+    run: remove('/v1/llm/gateway-keys'),
   },
   {
     label: 'active provider credential(s)',
     verb: 'Revoked',
-    items: (d) => d.llmGatewayControlPlane.credentials.filter((c) => c.status !== 'revoked'),
-    run: (item) => graphql('mutation($id: ID!) { revokeLLMProviderCredential(id: $id) }', { id: item.id }),
+    list: () => listAll('/v1/llm/provider-credentials', { status: 'active' }),
+    run: remove('/v1/llm/provider-credentials'),
   },
   {
     label: 'pending approval request(s)',
     verb: 'Rejected',
-    items: (d) => d.llmGatewayApprovals,
-    run: (item) => graphql(
-      `mutation($id: ID!, $input: LLMGatewayApprovalReviewInput!) {
-        reviewLLMGatewayApproval(id: $id, input: $input) { id }
-      }`,
-      { id: item.id, input: { decision: 'reject', reason: 'Automated cleanup' } },
-    ),
-  },
-  {
-    label: 'prompt template(s)',
-    verb: 'Archived',
-    items: (d) => d.llmPromptTemplates,
-    run: (item) => graphql('mutation($id: ID!) { archiveLLMPromptTemplate(id: $id) }', { id: item.id }),
-  },
-  {
-    label: 'eval dataset(s)',
-    items: (d) => d.llmDatasets,
-    run: (item) => graphql('mutation($id: ID!) { deleteLLMDataset(id: $id) }', { id: item.id }),
+    planGated: true, // llm_approval_workflows
+    list: () => listAll('/v1/llm/approvals', { status: 'pending' }),
+    run: (item) => adminApi('POST', `/v1/llm/approvals/${encodeURIComponent(item.id)}/review`, {
+      body: { decision: 'reject', reason: 'Automated cleanup' },
+    }),
   },
   {
     label: 'active price sheet(s)',
     verb: 'Archived',
-    items: (d) => d.llmContractPriceSheets.filter((p) => p.status !== 'archived'),
-    run: (item) => graphql('mutation($id: ID!) { archivePriceSheet(id: $id) { id } }', { id: item.id }),
+    planGated: true, // llm_contract_pricing
+    list: async () => (await listAll('/v1/llm/pricing/sheets')).filter((sheet) => sheet.status !== 'archived'),
+    run: (item) => adminApi('POST', `/v1/llm/pricing/sheets/${encodeURIComponent(item.id)}/archive`),
   },
   {
     label: 'ROI calibration(s)',
-    items: (d) => d.llmROICalibrations,
-    run: (item) => graphql('mutation($id: ID!) { deleteROICalibration(id: $id) }', { id: item.id }),
+    // This list is not paged.
+    list: async () => (await adminApi('GET', '/v1/llm/roi/calibrations')).items,
+    run: remove('/v1/llm/roi/calibrations'),
   },
 ];
+
+// A plan-gated step whose list call answers HTTP 403 is not on this plan: it is
+// skipped for the rest of the run. Any other list error fails the run.
+async function listStep(step) {
+  try {
+    return await step.list();
+  } catch (err) {
+    if (!step.planGated || err.status !== 403) throw err;
+    console.log(`Skipped ${step.label}: not available on this plan.`);
+    return null;
+  }
+}
 
 async function promptConfirmation() {
   const rl = readline.createInterface({
@@ -134,10 +142,10 @@ async function main() {
   console.log('  WARNING: AI Gateway Account Resource Cleanup');
   console.log('================================================================================');
   console.log('  This script permanently removes ALL AI gateway policies, policy bindings,');
-  console.log('  guardrail profiles, tool servers, eval datasets, and ROI calibrations;');
-  console.log('  archives ALL prompt templates and price sheets; revokes ALL virtual keys');
-  console.log('  and provider credentials; and rejects ALL pending approvals in the account');
-  console.log('  associated with the configured CLOPTIMA_AI_ADMIN_KEY.');
+  console.log('  guardrail profiles, tool servers, and ROI calibrations; archives ALL price');
+  console.log('  sheets; revokes ALL virtual keys and provider credentials; and rejects ALL');
+  console.log('  pending approvals in the account associated with the configured');
+  console.log('  CLOPTIMA_AI_ADMIN_KEY.');
   console.log();
   console.log(`  Target Gateway: ${config.baseUrl}`);
   console.log();
@@ -156,10 +164,15 @@ async function main() {
 
   let cleanedAny = false;
   let previousFingerprint;
+  let steps = STEPS;
   for (;;) {
     console.log(cleanedAny ? 'Checking for remaining gateway resources...' : 'Fetching existing gateway resources...');
-    const inventory = await graphql(INVENTORY_QUERY);
-    const plan = STEPS.map((step) => ({ ...step, found: step.items(inventory) }));
+    const plan = [];
+    for (const step of steps) {
+      const found = await listStep(step);
+      if (found) plan.push({ ...step, found });
+    }
+    steps = plan;
     const remaining = plan.reduce((total, step) => total + step.found.length, 0);
 
     if (remaining === 0) {
@@ -189,7 +202,7 @@ async function main() {
           done++;
         } catch (err) {
           failures++;
-          console.warn(`  Failed on ${label} ${item.name || item.displayName || item.id}: ${err.message}`);
+          console.warn(`  Failed on ${label} ${item.name || item.display_name || item.id}: ${err.message}`);
         }
       }
       console.log(`✓ ${verb} ${done}/${found.length} ${label}`);

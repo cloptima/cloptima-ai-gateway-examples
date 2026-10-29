@@ -35,9 +35,9 @@ async function main() {
     const policy = await createPolicy({
       name: `attribution-policy-${suffix}`,
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
       metadata: { required_metadata_keys: ['team_id', 'app_id', 'environment'] },
     });
 
@@ -45,13 +45,13 @@ async function main() {
     const key = await createVirtualKey({ name: `vk-attribution-${suffix}` });
 
     await createBinding({
-      policyId: policy.id,
-      principalId: key.id,
-      actorType: 'service',
+      policy_id: policy.id,
+      principal_id: key.id,
+      actor_type: 'service',
       priority: 5,
-      acknowledgeOverlap: true,
+      acknowledge_overlap: true,
     });
-    virtualKey = key.accessToken;
+    virtualKey = key.access_token;
   } else {
     throw new Error(
       'Set CLOPTIMA_VIRTUAL_KEY to use an existing key, or CLOPTIMA_AI_ADMIN_KEY to let this example create its own policy and key (see .env.example).'

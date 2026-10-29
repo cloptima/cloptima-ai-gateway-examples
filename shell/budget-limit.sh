@@ -17,7 +17,7 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
-# Illustrative, not a platform minimum. Bounds: dailyBudgetUsd accepts 0-10,000,000.
+# Illustrative, not a platform minimum. Bounds: daily_budget_usd accepts more than 0, up to 10,000,000.
 DAILY_BUDGET_USD="0.001"
 MAX_TOKENS_PER_CALL=100
 MAX_CALLS=60
@@ -29,8 +29,8 @@ echo ""
 # once in the Console, Terraform, or CI. It is skipped when CLOPTIMA_VIRTUAL_KEY points at a
 # key whose policy already matches.
 get_access "budget-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --argjson budget "$DAILY_BUDGET_USD" '{
-  name: "budget-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model], dailyBudgetUsd: $budget}')"
+  name: "budget-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model], daily_budget_usd: $budget}')"
 
 # Application code: run tasks until the gateway reports the budget is exhausted.
 echo "Executing workload under a policy with a \$$DAILY_BUDGET_USD daily budget cap (max $MAX_CALLS calls)..."

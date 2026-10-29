@@ -2,10 +2,9 @@
 # Automated cleanup script for Cloptima AI gateway example resources.
 #
 # WARNING: This script permanently deletes every AI gateway policy, policy
-# binding, guardrail profile, registered tool server, eval dataset, and ROI
-# calibration in the authenticated account. It also archives prompt templates
-# and price sheets, revokes all active virtual keys and provider credentials,
-# and rejects all pending approvals.
+# binding, guardrail profile, registered tool server, and ROI calibration in
+# the authenticated account. It also archives price sheets, revokes all active
+# virtual keys and provider credentials, and rejects all pending approvals.
 #
 # Intended for sandbox, testing, or demo environments to clean up resources
 # before or after evaluating example scripts.
@@ -19,6 +18,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib.sh"
 load_env
+
+LIST_ERROR_FILE="$(mktemp)"
+trap 'rm -f "$RESP_BODY_FILE" "$LIST_ERROR_FILE"' EXIT
 
 IS_FORCE=false
 for arg in "$@"; do
@@ -34,10 +36,10 @@ echo "==========================================================================
 echo "  WARNING: AI Gateway Account Resource Cleanup"
 echo "================================================================================"
 echo "  This script permanently removes ALL AI gateway policies, policy bindings,"
-echo "  guardrail profiles, tool servers, eval datasets, and ROI calibrations;"
-echo "  archives ALL prompt templates and price sheets; revokes ALL virtual keys"
-echo "  and provider credentials; and rejects ALL pending approvals in the account"
-echo "  associated with the configured CLOPTIMA_AI_ADMIN_KEY."
+echo "  guardrail profiles, tool servers, and ROI calibrations; archives ALL price"
+echo "  sheets; revokes ALL virtual keys and provider credentials; and rejects ALL"
+echo "  pending approvals in the account associated with the configured"
+echo "  CLOPTIMA_AI_ADMIN_KEY."
 echo ""
 echo "  Target Gateway: $BASE_URL"
 echo ""
@@ -55,56 +57,124 @@ if [ -t 0 ] && [ "$IS_FORCE" = "false" ]; then
   echo ""
 fi
 
-INVENTORY_QUERY='query GetCleanupInventory {
-  llmGatewayControlPlane {
-    bindings { id }
-    policies { id name }
-    keys { id name status }
-    credentials { id displayName status }
-    toolServers { id name }
-  }
-  llmGuardrailProfiles { id name }
-  llmGatewayApprovals(status: "pending", limit: 100) { id status }
-  llmPromptTemplates(limit: 100) { id name }
-  llmDatasets(limit: 100) { id name }
-  llmContractPriceSheets { id name status }
-  llmROICalibrations { id }
-}'
-
-run_items() {
-  local label="$1" verb="$2" filter="$3" mutation="$4" total done item id variables
-  total=$(jq "$filter | length" <<<"$DATA")
-  done=0
-  while IFS= read -r item; do
-    [ -z "$item" ] && continue
-    id=$(jq -r '.id' <<<"$item")
-    variables=$(jq -n --arg id "$id" '{id: $id}')
-    if graphql "$mutation" "$variables" >/dev/null 2>&1; then
-      done=$((done + 1))
-    else
-      BATCH_FAILURES=$((BATCH_FAILURES + 1))
-      echo "  Failed on $label $id" >&2
+# list_all <path> [query_json] -> prints every item on every page as one JSON
+# array, following next_cursor.
+list_all() {
+  local path="$1" query="${2:-}" cursor="" items="[]" page
+  if [ -z "$query" ]; then
+    query='{}'
+  fi
+  while true; do
+    page=$(admin_api GET "$path" "$(jq -c --arg cursor "$cursor" \
+      '. + {limit: 100, cursor: (if $cursor == "" then null else $cursor end)}' <<<"$query")") || exit 1
+    items=$(printf '%s\n%s' "$items" "$page" | jq -cs '.[0] + .[1].items') || exit 1
+    cursor=$(jq -r '.next_cursor // empty' <<<"$page") || exit 1
+    if [ -z "$cursor" ]; then
+      break
     fi
-  done < <(jq -c "$filter[]" <<<"$DATA")
-  echo "✓ $verb $done/$total $label"
+  done
+  echo "$items"
 }
 
-run_approvals() {
-  local total done item id variables
-  total=$(jq '(.llmGatewayApprovals // []) | length' <<<"$DATA")
+# list_active_keys -> prints every active virtual key as one JSON array. The
+# virtual-key list pages by offset.
+list_active_keys() {
+  local offset=0 items="[]" page
+  while true; do
+    page=$(admin_api GET /v1/llm/gateway-keys "$(jq -n --argjson offset "$offset" \
+      '{status: "active", limit: 100, offset: $offset}')") || exit 1
+    items=$(printf '%s\n%s' "$items" "$page" | jq -cs '.[0] + .[1].items') || exit 1
+    if [ "$(jq -r '.has_more' <<<"$page")" != "true" ]; then
+      break
+    fi
+    offset=$((offset + $(jq '.items | length' <<<"$page")))
+  done
+  echo "$items"
+}
+
+# list_price_sheets -> prints every price sheet that is not archived.
+list_price_sheets() {
+  list_all /v1/llm/pricing/sheets | jq -c '[.[] | select(.status != "archived")]'
+}
+
+# list_roi_calibrations -> prints every ROI calibration. This list is not paged.
+list_roi_calibrations() {
+  admin_api GET /v1/llm/roi/calibrations | jq -c '.items'
+}
+
+SKIPPED_KEYS=" "
+
+# is_skipped <inventory_key> -> succeeds when the plan does not include that
+# resource type.
+is_skipped() {
+  case "$SKIPPED_KEYS" in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# list_step <inventory_key> <label> <plan_gated: true|false> <list command...>
+# Runs the list command and adds its items to INVENTORY under <inventory_key>.
+# A plan-gated step whose list call answers HTTP 403 is not on this plan: it is
+# skipped for the rest of the run. Any other list error fails the run.
+list_step() {
+  local key="$1" label="$2" plan_gated="$3" items
+  shift 3
+  if is_skipped "$key"; then
+    return 0
+  fi
+  if items=$("$@" 2>"$LIST_ERROR_FILE"); then
+    INVENTORY+="$(jq -c --arg key "$key" '{($key): .}' <<<"$items")"$'\n'
+    FOUND+="  - $(jq 'length' <<<"$items") $label"$'\n'
+  elif [ "$plan_gated" = "true" ] && grep -q 'failed (HTTP 403):' "$LIST_ERROR_FILE"; then
+    echo "Skipped $label: not available on this plan."
+    SKIPPED_KEYS+="$key "
+  else
+    cat "$LIST_ERROR_FILE" >&2
+    exit 1
+  fi
+}
+
+# fetch_inventory -> sets DATA to one JSON object that maps each listed resource
+# type to its items, and FOUND to one summary line per listed type.
+fetch_inventory() {
+  INVENTORY=""
+  FOUND=""
+  list_step bindings "policy binding(s)" false list_all /v1/llm/policy-bindings
+  list_step policies "policy/policies" false list_all /v1/llm/policies
+  list_step guardrail_profiles "guardrail profile(s)" false list_all /v1/llm/guardrail-profiles
+  list_step tool_servers "tool server(s)" false list_all /v1/llm/tool-servers
+  list_step keys "active virtual key(s)" false list_active_keys
+  list_step credentials "active provider credential(s)" false list_all /v1/llm/provider-credentials '{"status": "active"}'
+  # llm_approval_workflows and llm_contract_pricing are plan features.
+  list_step approvals "pending approval request(s)" true list_all /v1/llm/approvals '{"status": "pending"}'
+  list_step price_sheets "active price sheet(s)" true list_price_sheets
+  list_step roi_calibrations "ROI calibration(s)" false list_roi_calibrations
+  DATA=$(jq -cs 'add // {}' <<<"$INVENTORY")
+}
+
+# run_items <label> <verb> <inventory_key> <method> <path_prefix> [path_suffix] [body_json]
+# Calls <method> <path_prefix>/<id><path_suffix> for every item in the inventory list.
+run_items() {
+  local label="$1" verb="$2" key="$3" method="$4" prefix="$5" suffix="${6:-}" body="${7:-}"
+  local total done item id name error
+  if is_skipped "$key"; then
+    return 0
+  fi
+  total=$(jq --arg key "$key" '.[$key] | length' <<<"$DATA")
   done=0
   while IFS= read -r item; do
     [ -z "$item" ] && continue
     id=$(jq -r '.id' <<<"$item")
-    variables=$(jq -n --arg id "$id" '{id: $id, input: {decision: "reject", reason: "Automated cleanup"}}')
-    if graphql 'mutation($id: ID!, $input: LLMGatewayApprovalReviewInput!) { reviewLLMGatewayApproval(id: $id, input: $input) { id } }' "$variables" >/dev/null 2>&1; then
+    name=$(jq -r '.name // .display_name // .id' <<<"$item")
+    if error=$(admin_api "$method" "$prefix/$(urlencode "$id")$suffix" "" "$body" 2>&1 >/dev/null); then
       done=$((done + 1))
     else
       BATCH_FAILURES=$((BATCH_FAILURES + 1))
-      echo "  Failed on pending approval request(s) $id" >&2
+      echo "  Failed on $label $name: $error" >&2
     fi
-  done < <(jq -c '(.llmGatewayApprovals // [])[]' <<<"$DATA")
-  echo "✓ Rejected $done/$total pending approval request(s)"
+  done < <(jq -c --arg key "$key" '.[$key][]' <<<"$DATA")
+  echo "✓ $verb $done/$total $label"
 }
 
 CLEANED_ANY=false
@@ -115,20 +185,8 @@ while true; do
   else
     echo "Fetching existing gateway resources..."
   fi
-  DATA=$(graphql "$INVENTORY_QUERY" '{}')
-  FINGERPRINT=$(jq -r '[
-    ((.llmGatewayControlPlane.bindings // [])[] | "binding:" + .id),
-    ((.llmGatewayControlPlane.policies // [])[] | "policy:" + .id),
-    ((.llmGuardrailProfiles // [])[] | "guardrail:" + .id),
-    ((.llmGatewayControlPlane.toolServers // [])[] | "tool-server:" + .id),
-    ((.llmGatewayControlPlane.keys // [])[] | select(.status != "revoked") | "key:" + .id),
-    ((.llmGatewayControlPlane.credentials // [])[] | select(.status != "revoked") | "credential:" + .id),
-    ((.llmGatewayApprovals // [])[] | "approval:" + .id),
-    ((.llmPromptTemplates // [])[] | "prompt:" + .id),
-    ((.llmDatasets // [])[] | "dataset:" + .id),
-    ((.llmContractPriceSheets // [])[] | select(.status != "archived") | "price-sheet:" + .id),
-    ((.llmROICalibrations // [])[] | "roi:" + .id)
-  ] | sort | join("|")' <<<"$DATA")
+  fetch_inventory
+  FINGERPRINT=$(jq -r '[to_entries[] | .key as $key | .value[] | "\($key):\(.id)"] | sort | join("|")' <<<"$DATA")
 
   if [ -z "$FINGERPRINT" ]; then
     if [ "$CLEANED_ANY" = "true" ]; then
@@ -146,31 +204,20 @@ while true; do
   PREVIOUS_FINGERPRINT="$FINGERPRINT"
 
   echo "Found:"
-  echo "  - $(jq '(.llmGatewayControlPlane.bindings // []) | length' <<<"$DATA") policy binding(s)"
-  echo "  - $(jq '(.llmGatewayControlPlane.policies // []) | length' <<<"$DATA") policy/policies"
-  echo "  - $(jq '(.llmGuardrailProfiles // []) | length' <<<"$DATA") guardrail profile(s)"
-  echo "  - $(jq '(.llmGatewayControlPlane.toolServers // []) | length' <<<"$DATA") tool server(s)"
-  echo "  - $(jq '[.llmGatewayControlPlane.keys[] | select(.status != "revoked")] | length' <<<"$DATA") active virtual key(s)"
-  echo "  - $(jq '[.llmGatewayControlPlane.credentials[] | select(.status != "revoked")] | length' <<<"$DATA") active provider credential(s)"
-  echo "  - $(jq '(.llmGatewayApprovals // []) | length' <<<"$DATA") pending approval request(s)"
-  echo "  - $(jq '(.llmPromptTemplates // []) | length' <<<"$DATA") prompt template(s)"
-  echo "  - $(jq '(.llmDatasets // []) | length' <<<"$DATA") eval dataset(s)"
-  echo "  - $(jq '[.llmContractPriceSheets[] | select(.status != "archived")] | length' <<<"$DATA") active price sheet(s)"
-  echo "  - $(jq '(.llmROICalibrations // []) | length' <<<"$DATA") ROI calibration(s)"
+  printf '%s' "$FOUND"
   echo ""
 
   BATCH_FAILURES=0
-  run_items "policy binding(s)" "Deleted" '(.llmGatewayControlPlane.bindings // [])' 'mutation($id: ID!) { deleteLLMGatewayPolicyBinding(id: $id) }'
-  run_items "policy/policies" "Deleted" '(.llmGatewayControlPlane.policies // [])' 'mutation($id: ID!) { deleteLLMGatewayPolicy(id: $id) }'
-  run_items "guardrail profile(s)" "Deleted" '(.llmGuardrailProfiles // [])' 'mutation($id: ID!) { deleteLLMGuardrailProfile(id: $id) }'
-  run_items "tool server(s)" "Deleted" '(.llmGatewayControlPlane.toolServers // [])' 'mutation($id: ID!) { deleteLLMGatewayToolServer(id: $id) }'
-  run_items "active virtual key(s)" "Revoked" '[.llmGatewayControlPlane.keys[] | select(.status != "revoked")]' 'mutation($id: ID!) { revokeLLMGatewayKey(id: $id) }'
-  run_items "active provider credential(s)" "Revoked" '[.llmGatewayControlPlane.credentials[] | select(.status != "revoked")]' 'mutation($id: ID!) { revokeLLMProviderCredential(id: $id) }'
-  run_approvals
-  run_items "prompt template(s)" "Archived" '(.llmPromptTemplates // [])' 'mutation($id: ID!) { archiveLLMPromptTemplate(id: $id) }'
-  run_items "eval dataset(s)" "Deleted" '(.llmDatasets // [])' 'mutation($id: ID!) { deleteLLMDataset(id: $id) }'
-  run_items "active price sheet(s)" "Archived" '[.llmContractPriceSheets[] | select(.status != "archived")]' 'mutation($id: ID!) { archivePriceSheet(id: $id) { id } }'
-  run_items "ROI calibration(s)" "Deleted" '(.llmROICalibrations // [])' 'mutation($id: ID!) { deleteROICalibration(id: $id) }'
+  run_items "policy binding(s)" "Deleted" bindings DELETE /v1/llm/policy-bindings
+  run_items "policy/policies" "Deleted" policies DELETE /v1/llm/policies
+  run_items "guardrail profile(s)" "Deleted" guardrail_profiles DELETE /v1/llm/guardrail-profiles
+  run_items "tool server(s)" "Deleted" tool_servers DELETE /v1/llm/tool-servers
+  run_items "active virtual key(s)" "Revoked" keys DELETE /v1/llm/gateway-keys
+  run_items "active provider credential(s)" "Revoked" credentials DELETE /v1/llm/provider-credentials
+  run_items "pending approval request(s)" "Rejected" approvals POST /v1/llm/approvals /review \
+    '{"decision": "reject", "reason": "Automated cleanup"}'
+  run_items "active price sheet(s)" "Archived" price_sheets POST /v1/llm/pricing/sheets /archive
+  run_items "ROI calibration(s)" "Deleted" roi_calibrations DELETE /v1/llm/roi/calibrations
 
   if [ "$BATCH_FAILURES" -gt 0 ]; then
     echo "Cleanup failed: $BATCH_FAILURES resource(s) could not be removed" >&2

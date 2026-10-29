@@ -6,7 +6,8 @@
  *
  * Pattern:
  * 1. Governance setup: register tool servers and bind a policy that allows one of them.
- *    A newly registered server is created `disabled` until it is reviewed.
+ *    On plans with approval workflows, a newly registered server is created `disabled` with a
+ *    `pending_approval_id` until it is reviewed. On other plans it is created `active`.
  * 2. Case 1: Agent calls an allowed tool on an approved server -> admitted.
  * 3. Case 2: Agent references an unregistered server -> blocked with HTTP 403.
  * 4. Case 3: Agent requests a tool the server does not allow -> blocked with HTTP 403.
@@ -18,13 +19,13 @@
  */
 import { openaiClient } from '../lib/client.mjs';
 import { provisionApp } from '../lib/access.mjs';
-import { graphql, listLLMGatewayApprovals } from '../lib/gatewayAdmin.mjs';
+import { adminApi } from '../lib/gatewayAdmin.mjs';
 import { MODELS } from '../lib/models.mjs';
 import { CONSOLE, runSuffix } from '../lib/config.mjs';
 
-const CREATE_TOOL_SERVER = `mutation CreateToolServer($input: LLMGatewayToolServerInput!) {
-  createLLMGatewayToolServer(input: $input) { id name status }
-}`;
+function createToolServer(server) {
+  return adminApi('POST', '/v1/llm/tool-servers', { body: server });
+}
 
 // Sends a Responses API request that attaches an MCP server, and returns the violations
 // the gateway reports when it blocks the request.
@@ -50,33 +51,30 @@ async function main() {
 
   // --- Governance setup (admin) -------------------------------------------------------------
   // Platform admins normally register tool servers once in the Console or through the API.
-  console.log('Registering a new tool server (awaiting security review)...');
-  const { createLLMGatewayToolServer: pendingServer } = await graphql(CREATE_TOOL_SERVER, {
-    input: {
-      name: `mcp-pending-${suffix}`,
-      serverType: 'mcp',
-      serverUrl: 'https://mcp.example.com/v1',
-      status: 'active',
-      allowedToolNames: ['search', 'lookup'],
-    },
+  console.log('Registering a new tool server...');
+  const pendingServer = await createToolServer({
+    name: `mcp-pending-${suffix}`,
+    server_type: 'mcp',
+    server_url: 'https://mcp.example.com/v1',
+    status: 'active',
+    allowed_tool_names: ['search', 'lookup'],
   });
-  console.log(`  ${pendingServer.name}: status "${pendingServer.status}" until an admin approves the registration.`);
+  if (pendingServer.pending_approval_id) {
+    console.log(`  ${pendingServer.name}: status "${pendingServer.status}" until an admin approves the registration.`);
+    console.log(`  Review queued as approval ${pendingServer.pending_approval_id} (${CONSOLE.audit}).`);
+  } else {
+    console.log(`  ${pendingServer.name}: status "${pendingServer.status}" (this plan has no registration review step).`);
+  }
 
-  const pending = await listLLMGatewayApprovals({ status: 'pending', limit: 50 });
-  const registration = pending.find((a) => a.approvalType === 'mcp_tool_server_registration' && a.targetId === pendingServer.id);
-  if (registration) console.log(`  Review queued as approval ${registration.id} (${CONSOLE.audit}).`);
-
-  console.log('\nRegistering a reviewed tool server with applyImmediately: true...');
+  console.log('\nRegistering a reviewed tool server with apply_immediately: true...');
   const serverLabel = `mcp-github-${suffix}`;
-  const { createLLMGatewayToolServer: activeServer } = await graphql(CREATE_TOOL_SERVER, {
-    input: {
-      name: serverLabel,
-      serverType: 'mcp',
-      serverUrl: 'https://mcp.github.example/v1',
-      status: 'active',
-      allowedToolNames: ['create_issue', 'list_issues'],
-      applyImmediately: true,
-    },
+  const activeServer = await createToolServer({
+    name: serverLabel,
+    server_type: 'mcp',
+    server_url: 'https://mcp.github.example/v1',
+    status: 'active',
+    allowed_tool_names: ['create_issue', 'list_issues'],
+    apply_immediately: true,
   });
   console.log(`  ${activeServer.name}: status "${activeServer.status}"`);
 
@@ -85,10 +83,10 @@ async function main() {
     policy: {
       name: 'mcp-agent-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default],
-      allowedToolServers: [serverLabel], // the agent may only use this tool server
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default],
+      allowed_tool_servers: [serverLabel], // the agent may only use this tool server
     },
   });
 

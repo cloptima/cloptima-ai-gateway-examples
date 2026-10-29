@@ -5,11 +5,11 @@
 #
 # 1. A support-automation agent (cost center): resolving a ticket avoids a
 #    pre-LLM support cost rather than booking revenue, so its value is
-#    tracked as calibratedBusinessValueUsd/netRoiUsd against an ROI
+#    tracked as calibrated_business_value_usd/net_roi_usd against an ROI
 #    calibration row (value per success, and what handling it manually used
 #    to cost).
 # 2. A checkout-upsell agent (profit center): each accepted upsell books
-#    real revenue_usd, so its value shows up as a positive marginUsd
+#    real revenue_usd, so its value shows up as a positive margin_usd
 #    (revenue - spend) instead.
 #
 #
@@ -61,31 +61,33 @@ submit_unit_metrics() {
 }
 
 # read_unit_economics <unit_type>
+# A failed report read prints a note and lets the script continue.
 read_unit_economics() {
   local unit_type="$1"
-  local vars
-  vars=$(jq -n --arg unitType "$unit_type" '{unitType: $unitType, groupBy: "app_id", window: "30d"}')
-  graphql 'query UnitEconomics($unitType: String!, $groupBy: String!, $window: String) {
-    llmUnitEconomics(unitType: $unitType, groupBy: $groupBy, window: $window) {
-      rows { bucket unitCount costPerUnitUsd marginUsd netRoiUsd calibratedBusinessValueUsd missingMetadata }
-    }
-  }' "$vars" | jq '.llmUnitEconomics.rows'
+  local query report
+  query=$(jq -n --arg unit_type "$unit_type" '{unit_type: $unit_type, group_by: "app_id", window: "30d"}')
+  # admin_api prints the error to stderr only when the call fails.
+  if ! report=$(admin_api GET /v1/llm/unit-economics "$query" 2>&1); then
+    echo "  (Report aggregation pending: $report)"
+    return 0
+  fi
+  jq --arg unit_type "$unit_type" '[.results[] | select(.unit_type == $unit_type) | .rows[]
+    | {bucket, unit_count, cost_per_unit_usd, margin_usd, net_roi_usd, calibrated_business_value_usd, missing_metadata}]' <<<"$report"
 }
 
 # --- Cost center: support automation -----------------------------------
 echo "Seeding an ROI calibration row for \"$COST_CENTER_TRANSACTION_TYPE\" (illustrative, not customer-validated)..."
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 EFFECTIVE_END="$(date -u -v+1y +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 year' +%Y-%m-%dT%H:%M:%SZ)"
-ROI_VARS=$(jq -n --arg type "$COST_CENTER_TRANSACTION_TYPE" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
-{input: {transactionType: $type, valuePerSuccessCents: 800, preLlmBaselineCostCents: 350, owner: "cloptima-ai-gateway-examples", effectiveStart: $start, effectiveEnd: $end}}')
-graphql 'mutation UpsertROI($input: UpsertROICalibrationInput!) { upsertROICalibration(input: $input) { id } }' "$ROI_VARS" >/dev/null
+admin_api POST /v1/llm/roi/calibrations "" "$(jq -n --arg type "$COST_CENTER_TRANSACTION_TYPE" --arg start "$NOW" --arg end "$EFFECTIVE_END" '
+{transaction_type: $type, value_per_success_cents: 800, pre_llm_baseline_cost_cents: 350, owner: "cloptima-ai-gateway-examples", effective_start: $start, effective_end: $end}')" >/dev/null
 echo "ROI calibration seeded."
 
 echo "Creating a policy + key and making a few real support-automation calls..."
 TEAM_ID="Support Automation"; ENVIRONMENT="prod"
 provision_app "unit-economics-support" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "unit-economics-support-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
+  name: "unit-economics-support-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model]}')"
 SUPPORT_APP_ID="$APP_ID"
 
 # The unit-metrics window is anchored to the calibration's own effective
@@ -124,8 +126,8 @@ echo ""
 echo "Creating a policy + key and making a few real checkout-upsell calls..."
 TEAM_ID="Checkout Upsell"; ENVIRONMENT="prod"
 provision_app "unit-economics-upsell" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "unit-economics-upsell-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
+  name: "unit-economics-upsell-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model]}')"
 UPSELL_APP_ID="$APP_ID"
 
 UPSELL_WINDOW_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -2,8 +2,9 @@
 # Enterprise agent with governed MCP tools. The agent calls tools through Cloptima's MCP
 # governance layer, and the application handles tool servers and tools that policy does not allow.
 #
-# 1. Governance setup: register tool servers and bind a policy that allows one of them. A newly
-#    registered server is created `disabled` until it is reviewed.
+# 1. Governance setup: register tool servers and bind a policy that allows one of them. On plans
+#    with approval workflows, a newly registered server is created `disabled` with a
+#    `pending_approval_id` until it is reviewed. On other plans it is created `active`.
 # 2. Case 1: an allowed tool on an approved server is admitted.
 # 3. Case 2: an unregistered server is blocked with HTTP 403.
 # 4. Case 3: a tool the server does not allow is blocked with HTTP 403.
@@ -21,40 +22,35 @@ require_admin_key
 MODEL_DEFAULT="vertex_ai/gemini-3.5-flash-lite"
 SUFFIX="$(run_suffix)"
 
-CREATE_TOOL_SERVER='mutation CreateToolServer($input: LLMGatewayToolServerInput!) {
-  createLLMGatewayToolServer(input: $input) { id name status }
-}'
-
 echo "=== Enterprise Agent: MCP Tool Governance ==="
 echo ""
 
 # Governance setup (admin): platform admins normally register tool servers once in the Console
 # or through the API.
-echo "Registering a new tool server (awaiting security review)..."
-PENDING_SERVER=$(graphql "$CREATE_TOOL_SERVER" "$(jq -n --arg name "mcp-pending-$SUFFIX" '{input: {
-  name: $name, serverType: "mcp", serverUrl: "https://mcp.example.com/v1", status: "active",
-  allowedToolNames: ["search", "lookup"]}}')" | jq -c '.createLLMGatewayToolServer')
-PENDING_SERVER_ID=$(jq -r '.id' <<<"$PENDING_SERVER")
-echo "  $(jq -r '.name' <<<"$PENDING_SERVER"): status \"$(jq -r '.status' <<<"$PENDING_SERVER")\" until an admin approves the registration."
-
-REGISTRATION=$(list_llm_gateway_approvals "pending" 50 | jq -c --arg id "$PENDING_SERVER_ID" \
-  '.[] | select(.approvalType == "mcp_tool_server_registration" and .targetId == $id)')
-if [ -n "$REGISTRATION" ]; then
-  echo "  Review queued as approval $(jq -r '.id' <<<"$REGISTRATION") ($CONSOLE_AUDIT)."
+echo "Registering a new tool server..."
+PENDING_SERVER=$(admin_api POST /v1/llm/tool-servers "" "$(jq -n --arg name "mcp-pending-$SUFFIX" '{
+  name: $name, server_type: "mcp", server_url: "https://mcp.example.com/v1", status: "active",
+  allowed_tool_names: ["search", "lookup"]}')")
+PENDING_APPROVAL_ID=$(jq -r '.pending_approval_id // empty' <<<"$PENDING_SERVER")
+if [ -n "$PENDING_APPROVAL_ID" ]; then
+  echo "  $(jq -r '.name' <<<"$PENDING_SERVER"): status \"$(jq -r '.status' <<<"$PENDING_SERVER")\" until an admin approves the registration."
+  echo "  Review queued as approval $PENDING_APPROVAL_ID ($CONSOLE_AUDIT)."
+else
+  echo "  $(jq -r '.name' <<<"$PENDING_SERVER"): status \"$(jq -r '.status' <<<"$PENDING_SERVER")\" (this plan has no registration review step)."
 fi
 
 echo ""
-echo "Registering a reviewed tool server with applyImmediately: true..."
+echo "Registering a reviewed tool server with apply_immediately: true..."
 SERVER_LABEL="mcp-github-$SUFFIX"
-ACTIVE_SERVER=$(graphql "$CREATE_TOOL_SERVER" "$(jq -n --arg name "$SERVER_LABEL" '{input: {
-  name: $name, serverType: "mcp", serverUrl: "https://mcp.github.example/v1", status: "active",
-  allowedToolNames: ["create_issue", "list_issues"], applyImmediately: true}}')" | jq -c '.createLLMGatewayToolServer')
+ACTIVE_SERVER=$(admin_api POST /v1/llm/tool-servers "" "$(jq -n --arg name "$SERVER_LABEL" '{
+  name: $name, server_type: "mcp", server_url: "https://mcp.github.example/v1", status: "active",
+  allowed_tool_names: ["create_issue", "list_issues"], apply_immediately: true}')")
 echo "  $(jq -r '.name' <<<"$ACTIVE_SERVER"): status \"$(jq -r '.status' <<<"$ACTIVE_SERVER")\""
 
 provision_app "mcp-agent-demo" "$(jq -n --arg model "$MODEL_DEFAULT" --arg server "$SERVER_LABEL" '{
-  name: "mcp-agent-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model],
-  allowedToolServers: [$server]}')"
+  name: "mcp-agent-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model],
+  allowed_tool_servers: [$server]}')"
 
 # Application code. Responses API request that attaches an MCP server; prints whether the gateway
 # blocked it and why.
@@ -67,6 +63,11 @@ call_with_mcp_server() {
     -d "$(jq -n --arg model "$MODEL_DEFAULT" --arg server "$server_label" --arg tool "$tool_name" '{
       model: $model, input: "Run the requested maintenance task.",
       tools: [{type: "mcp", server_label: $server, allowed_tools: [$tool], require_approval: "always"}]}')")
+  if [ "$HTTP_CODE" != "403" ] && { [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; }; then
+    echo "Example failed: request returned unexpected HTTP $HTTP_CODE" >&2
+    describe_block >&2
+    exit 1
+  fi
 }
 
 echo ""
@@ -88,6 +89,7 @@ if [ "$HTTP_CODE" = "200" ]; then
   jq -r '.choices[0].message | if .tool_calls then "Model selected tool: \(.tool_calls[0].function.name)(\(.tool_calls[0].function.arguments))" else "Model response: \(.content)" end' "$RESP_BODY_FILE"
 else
   describe_block
+  exit 1
 fi
 
 echo ""

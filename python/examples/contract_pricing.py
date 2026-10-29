@@ -19,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 import os
 import time
 from typing import Optional
+from urllib.parse import quote
 
 from lib import config, gateway_admin
 from lib.access import provision_app
@@ -45,13 +46,12 @@ def resolve_provider_credential_id() -> str:
 
     suffix = config.run_suffix()
     print("Registering provider credential (BYOK)...")
-    created = gateway_admin.graphql(
-        """mutation CreateCredential($input: CreateLLMProviderCredentialInput!) {
-          createLLMProviderCredential(input: $input) { id provider displayName }
-        }""",
-        {"input": {"provider": PROVIDER, "displayName": f"byok-openai-{suffix}", "apiKey": provider_api_key}},
+    created = gateway_admin.admin_api(
+        "POST",
+        "/v1/llm/provider-credentials",
+        body={"provider": PROVIDER, "display_name": f"byok-openai-{suffix}", "api_key": provider_api_key},
     )
-    return created["createLLMProviderCredential"]["id"]
+    return created["id"]
 
 
 def setup_enterprise_price_sheet(suffix: str) -> dict:
@@ -59,46 +59,36 @@ def setup_enterprise_price_sheet(suffix: str) -> dict:
     effective_end = now + timedelta(days=365)
 
     print(f"Setting up enterprise price sheet with negotiated rates for {MODEL}...")
-    res = gateway_admin.graphql(
-        """mutation CreatePriceSheet($input: CreatePriceSheetInput!) {
-          createPriceSheet(input: $input) { id name status }
-        }""",
-        {
-            "input": {
-                "name": f"Enterprise Agreement ({suffix})",
-                "owner": "cloptima-ai-gateway-examples",
-                "effectiveStart": now.isoformat(),
-                "effectiveEnd": effective_end.isoformat(),
-            }
+    sheet = gateway_admin.admin_api(
+        "POST",
+        "/v1/llm/pricing/sheets",
+        body={
+            "name": f"Enterprise Agreement ({suffix})",
+            "owner": "cloptima-ai-gateway-examples",
+            "effective_start": now.isoformat(),
+            "effective_end": effective_end.isoformat(),
         },
     )
-    sheet = res["createPriceSheet"]
+    sheet_path = f"/v1/llm/pricing/sheets/{quote(sheet['id'], safe='')}"
 
-    gateway_admin.graphql(
-        """mutation AddRateOverrides($priceSheetId: ID!, $overrides: [RateOverrideInput!]!) {
-          addRateOverrides(priceSheetId: $priceSheetId, overrides: $overrides) {
-            id provider model inputRatePerMillion outputRatePerMillion
-          }
-        }""",
-        {
-            "priceSheetId": sheet["id"],
+    gateway_admin.admin_api(
+        "POST",
+        f"{sheet_path}/overrides",
+        body={
             "overrides": [
                 {
                     "provider": PROVIDER,
                     "model": MODEL,
-                    "inputRatePerMillion": CONTRACT_INPUT_RATE,
-                    "outputRatePerMillion": CONTRACT_OUTPUT_RATE,
-                    "effectiveStart": now.isoformat(),
-                    "effectiveEnd": effective_end.isoformat(),
+                    "input_rate_per_million": CONTRACT_INPUT_RATE,
+                    "output_rate_per_million": CONTRACT_OUTPUT_RATE,
+                    "effective_start": now.isoformat(),
+                    "effective_end": effective_end.isoformat(),
                 }
             ],
         },
     )
 
-    gateway_admin.graphql(
-        """mutation ApprovePriceSheet($id: ID!) { approvePriceSheet(id: $id) { id status approvedAt } }""",
-        {"id": sheet["id"]},
-    )
+    gateway_admin.admin_api("POST", f"{sheet_path}/approve")
 
     print(f"Enterprise price sheet approved: {sheet['id']}")
     return sheet
@@ -115,9 +105,9 @@ def main() -> None:
         policy={
             "name": "contract-pricing-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": [PROVIDER],
-            "allowedModels": [CANONICAL_MODEL],
+            "budget_mode": "hard",
+            "allowed_providers": [PROVIDER],
+            "allowed_models": [CANONICAL_MODEL],
         },
     )
 
@@ -154,18 +144,16 @@ def main() -> None:
         if attempt > 0:
             time.sleep(2.0)
         try:
-            result = gateway_admin.graphql(
-                """query Dashboard($startTime: DateTime!, $endTime: DateTime!) {
-                  llmFinanceDashboard(window: "custom", startTime: $startTime, endTime: $endTime) {
-                    retailCostUsd
-                    contractedCostUsd
-                    hasActiveContract
-                  }
-                }""",
-                {"startTime": verification_start, "endTime": datetime.now(timezone.utc).isoformat()},
+            d = gateway_admin.admin_api(
+                "GET",
+                "/v1/llm/finance/dashboard",
+                query={
+                    "window": "custom",
+                    "start_time": verification_start,
+                    "end_time": datetime.now(timezone.utc).isoformat(),
+                },
             )
-            d = result.get("llmFinanceDashboard")
-            if d and d.get("hasActiveContract"):
+            if d.get("has_active_contract"):
                 dashboard = d
                 break
         except Exception:
@@ -173,10 +161,10 @@ def main() -> None:
 
     if dashboard:
         print("\n--- FinOps Reconciliation Summary ---")
-        print(f"Active Enterprise Contract: {'Yes' if dashboard['hasActiveContract'] else 'No'}")
-        print(f"Standard Retail Cost: ${dashboard.get('retailCostUsd')}")
-        print(f"Effective Contracted Cost: ${dashboard.get('contractedCostUsd')}")
-        savings = float(dashboard.get("retailCostUsd") or 0) - float(dashboard.get("contractedCostUsd") or 0)
+        print(f"Active Enterprise Contract: {'Yes' if dashboard['has_active_contract'] else 'No'}")
+        print(f"Standard Retail Cost: ${dashboard.get('retail_cost_usd')}")
+        print(f"Effective Contracted Cost: ${dashboard.get('contracted_cost_usd')}")
+        savings = float(dashboard.get("retail_cost_usd") or 0) - float(dashboard.get("contracted_cost_usd") or 0)
         print(f"Realized Savings: ${savings:.4f}")
     else:
         print("Finance dashboard metrics recorded; newly approved rate sheets reconcile in reporting shortly.")

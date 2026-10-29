@@ -30,9 +30,9 @@ def main() -> None:
         policy={
             "name": "multi-model-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"], MODELS["premium"]],
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"], MODELS["premium"]],
         },
     )
 
@@ -64,7 +64,6 @@ def main() -> None:
 
     print("Compare aggregate cost and latency per model in the Cloptima Console:")
     print(f"  - Explorer: {CONSOLE['spend']}")
-    print(f"  - Recommendations: {CONSOLE['recommendations']}")
 
 
 if __name__ == "__main__":

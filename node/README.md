@@ -61,7 +61,7 @@ Set one credential in `.env`:
 - `CLOPTIMA_AI_ADMIN_KEY`: the example runs its governance setup for you, then runs the application code. Works with every example.
 - `CLOPTIMA_VIRTUAL_KEY`: the example skips setup and runs only the application code with your key. Use it with the examples marked **Virtual key** below. The key must be bound to a policy like the one in the file's governance setup, or the scenario will not trigger.
 
-Some examples need more: `byok` and `contract-pricing` need `PROVIDER_API_KEY` (or `CLOPTIMA_PROVIDER_CREDENTIAL_ID`), and the managed guardrail examples need available managed credits.
+Some examples need more: `byok` and `contract-pricing` need `PROVIDER_API_KEY` (or `CLOPTIMA_PROVIDER_CREDENTIAL_ID`). `pii-guardrail` and `content-safety-guardrail` need the `llm_guardrail_enterprise` entitlement. Every other model call runs on Cloptima-managed credentials and needs available AI credits; Cloptima-managed content-safety scans are billed to the same credits.
 
 ## Handling gateway responses
 
@@ -69,9 +69,9 @@ When a control applies, the gateway returns a standard HTTP error that the SDK r
 
 ```json
 {
-  "error": "Request blocked by policy",
-  "reason": "guardrail_violation",
-  "violations": ["us_ssn"]
+  "error": "Your AI request was blocked because it matched a configured safety rule.",
+  "reason": "gateway_guardrail_blocked",
+  "violations": ["custom_employee_id"]
 }
 ```
 
@@ -106,7 +106,7 @@ try {
 | `npm run quickstart-openai` | Virtual key | Chat completion and streaming with the OpenAI SDK. |
 | `npm run quickstart-anthropic` | Virtual key | Messages and streaming with the Anthropic SDK. |
 | `npm run multi-model` | Virtual key | Compare latency and token cost across models under one policy. |
-| `npm run pii-guardrail` | Virtual key | Support bot blocks an SSN before it reaches the model and returns a friendly fallback. |
+| `npm run pii-guardrail` | Virtual key | A guardrail profile redacts US personal data before it reaches the model provider and restores it in the answer; a custom rule blocks a message that carries an employee ID. |
 | `npm run provider-deny` | Virtual key | Compliance policy blocks a non-approved provider; the app falls back to an approved model. |
 | `npm run rate-limit` | Virtual key | Batch worker retries with exponential backoff on HTTP 429. |
 | `npm run token-limit` | Virtual key | Summarization service handles an output-token cap. |
@@ -114,23 +114,20 @@ try {
 | `npm run agentic-runaway` | Virtual key | Agent loop is stopped by the policy's loop-iteration cap. |
 | `npm run exact-semantic-cache` | Virtual key | Latency and token savings from exact and semantic cache hits. |
 | `npm run conversation-prompt-caching` | Virtual key | Provider prompt caching on a growing multi-turn conversation (OpenAI and Anthropic). |
-| `npm run adaptive-routing` | Virtual key | Adaptive routing in observe mode across cheap, balanced, and strong model tiers. |
-| `npm run guardrail-cost-governance` | Virtual key | Per-request cost cap on a managed guardrail scan. |
 | `npm run metadata-deny` | Virtual key | Requests without team and app attribution are refused; attributed requests are admitted. With `CLOPTIMA_VIRTUAL_KEY`, use an unscoped key (no team or app baked in) bound to a policy that requires attribution. |
-| `npm run guardrail-detector-categories` | Virtual key | One managed guardrail scan per run: Google Model Armor (default), Azure AI Content Safety, or Amazon Bedrock Guardrails. Choose with `GUARDRAIL_PROVIDER=google-model-armor\|azure-content-safety\|bedrock-guardrails`. |
+| `npm run content-safety-guardrail` | Virtual key | Cloptima-managed content safety answers a normal request and blocks a prompt-injection attempt (requires available managed credits). |
 | `npm run byok` | Virtual key + `CLOPTIMA_PROVIDER_CREDENTIAL_ID`, or admin key + `PROVIDER_API_KEY` | Route calls through your own provider credential. |
 | `npm run semantic-cache-enforce` | Admin key | Enforce-mode semantic cache, including the class approval it needs. |
 | `npm run unit-economics-roi` | Admin key | Cost-center and profit-center ROI from business-outcome headers and unit metrics. |
 | `npm run contract-pricing` | Admin key + `PROVIDER_API_KEY` or `CLOPTIMA_PROVIDER_CREDENTIAL_ID` | Negotiated rate sheet versus retail cost on your own credentials. |
 | `npm run approval-workflow` | Admin key | Budget-change request waits in the governance queue; a pre-authorized change applies immediately. |
-| `npm run prompt-release-workflow` | Admin key | Prompt evaluation against a golden dataset and a quality-gated release. |
 | `npm run mcp-tool-governance` | Admin key | Tool servers start disabled until reviewed; unregistered servers and disallowed tools are blocked. |
-| `npm run session-trace-audit` | Admin key | Agent session with tool I/O capture and per-step integrity hashes (`traceSha256`). |
-| `npm run cleanup` | Admin key | Delete the policies, keys, profiles, and datasets the examples created. |
+| `npm run session-trace-audit` | Admin key | Agent session with tool I/O capture and per-step integrity hashes (`trace_sha256`). |
+| `npm run cleanup` | Admin key | Reset the account: delete all policies, bindings, guardrail profiles, tool servers, and ROI calibrations; archive price sheets; revoke keys and credentials; reject pending approvals. |
 
 ## Cleanup
 
-Each run creates a policy, a virtual key, and a binding. To remove what the examples created:
+Each run creates a policy, a virtual key, and a binding. `cleanup` resets the whole account, not only what the examples created:
 
 ```bash
 npm run cleanup             # asks for confirmation

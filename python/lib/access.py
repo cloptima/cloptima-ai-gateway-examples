@@ -32,25 +32,25 @@ def provision_app(
     policy_input = dict(policy)
     policy_input["name"] = f"{policy['name']}-{suffix}"
     if profile:
-        policy_input["guardrailProfileId"] = profile["id"]
+        policy_input["guardrail_profile_id"] = profile["id"]
 
     created_policy = gateway_admin.create_policy(policy_input)
     key = gateway_admin.create_virtual_key(
-        {"name": f"vk-{app_id}", "teamId": team, "appId": app_id, "environment": environment}
+        {"name": f"vk-{app_id}", "team_id": team, "app_id": app_id, "environment": environment}
     )
     gateway_admin.create_binding(
         {
-            "policyId": created_policy["id"],
-            "teamId": team,
-            "appId": app_id,
+            "policy_id": created_policy["id"],
+            "team_id": team,
+            "app_id": app_id,
             "environment": environment,
             "priority": 10,
-            "acknowledgeOverlap": True,
+            "acknowledge_overlap": True,
         }
     )
 
     return {
-        "virtual_key": key["accessToken"],
+        "virtual_key": key["access_token"],
         "app_id": app_id,
         "team_id": team,
         "environment": environment,

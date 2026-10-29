@@ -9,11 +9,11 @@
 # exact arguments is critical to detect unintended behavior, prompt injection,
 # or rogue models transmitting customer data to unapproved external endpoints.
 #
-# Setting promptRetentionMode: 'tool_io' enables capturing tool calls, arguments,
+# Setting prompt_retention_mode: 'tool_io' enables capturing tool calls, arguments,
 # and results verbatim, while keeping conversational user text and system
 # prompts uncollected to protect user privacy.
 #
-# Each step is anchored with a SHA-256 integrity hash (traceSha256) on the
+# Each step is anchored with a SHA-256 integrity hash (trace_sha256) on the
 # ledger at request time, creating a tamper-evident audit record.
 #
 #
@@ -92,11 +92,11 @@ TOOLS_JSON=$(jq -n --argjson a "$CHECK_ORDER_TOOL" --argjson b "$ISSUE_REFUND_TO
 
 # Governance setup: a policy with tool_io retention, bound to a production app. Platform admins
 # normally create it once in the Console, Terraform, or CI.
-echo "Creating policy with promptRetentionMode: 'tool_io'..."
+echo "Creating policy with prompt_retention_mode: 'tool_io'..."
 TEAM_ID="Support AI"; ENVIRONMENT="production"
 provision_app "support-agent-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "session-trace-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model], promptRetentionMode: "tool_io"}')"
+  name: "session-trace-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model], prompt_retention_mode: "tool_io"}')"
 echo "  policy $POLICY_ID, key minted, bound to app \"$APP_ID\"."
 echo ""
 
@@ -179,67 +179,44 @@ fi
 # instantly - poll briefly instead of assuming a fixed delay is always
 # enough, so the trace hash is reliably present on first read.
 echo ""
-echo "Querying session steps from the ledger (llmAgentSession)..."
-SESSION_VARS=$(jq -n --arg sessionId "$AGENT_SESSION_ID" '{sessionId: $sessionId, window: null}')
-SESSION_QUERY='query GetAgentSession($sessionId: String!, $window: String) {
-  llmAgentSession(sessionId: $sessionId, window: $window) {
-    agentSessionId
-    steps {
-      requestId
-      provider
-      model
-      status
-      inputTokens
-      outputTokens
-      costUsd
-      requestedToolNames
-      responseToolNames
-      traceSha256
-    }
-  }
-}'
+echo "Querying session steps from the ledger (GET /v1/llm/sessions/steps)..."
+AGENT_SESSION='{}'
 for attempt in 0 1 2 3 4 5; do
   if [ "$attempt" -gt 0 ]; then
     sleep 0.75
   fi
-  SESSION_RESULT=$(graphql "$SESSION_QUERY" "$SESSION_VARS")
-  AGENT_SESSION=$(echo "$SESSION_RESULT" | jq -c '.llmAgentSession')
-  STEPS_SO_FAR=$(echo "$AGENT_SESSION" | jq '.steps | length')
-  TRACES_READY=$(echo "$AGENT_SESSION" | jq --argjson expected "$TURN_COUNT" \
-    '(.steps | length) >= $expected and ([.steps[].traceSha256] | all)')
-  if [ "$TRACES_READY" = "true" ]; then
-    break
+  # A failed read is retried, like an incomplete one.
+  if STEPS_RESULT=$(list_session_steps "$(jq -n --arg session_id "$AGENT_SESSION_ID" '{session_id: $session_id}')" 2>/dev/null); then
+    AGENT_SESSION="$STEPS_RESULT"
+    TRACES_READY=$(echo "$AGENT_SESSION" | jq --argjson expected "$TURN_COUNT" \
+      '(.items | length) >= $expected and ([.items[].trace_sha256] | all)')
+    if [ "$TRACES_READY" = "true" ]; then
+      break
+    fi
   fi
 done
-STEP_COUNT=$(echo "$AGENT_SESSION" | jq '.steps | length')
-echo "  Session ID: $(echo "$AGENT_SESSION" | jq -r '.agentSessionId') ($STEP_COUNT steps recorded)"
+STEP_COUNT=$(echo "$AGENT_SESSION" | jq '.items // [] | length')
+echo "  Session ID: $(echo "$AGENT_SESSION" | jq -r --arg id "$AGENT_SESSION_ID" '.agent_session_id // $id') ($STEP_COUNT steps recorded)"
 
-for i in $(seq 0 $((STEP_COUNT - 1))); do
-  STEP=$(echo "$AGENT_SESSION" | jq -c ".steps[$i]")
+for ((i = 0; i < STEP_COUNT; i++)); do
+  STEP=$(echo "$AGENT_SESSION" | jq -c ".items[$i]")
   echo ""
   echo "  Step $((i + 1)):"
-  echo "    Request ID: $(echo "$STEP" | jq -r '.requestId')"
+  echo "    Request ID: $(echo "$STEP" | jq -r '.request_id')"
   echo "    Provider / Model: $(echo "$STEP" | jq -r '.provider') / $(echo "$STEP" | jq -r '.model')"
-  echo "    Status: $(echo "$STEP" | jq -r '.status') ($(echo "$STEP" | jq -r '.inputTokens') in / $(echo "$STEP" | jq -r '.outputTokens') out, cost: \$$(echo "$STEP" | jq -r '.costUsd'))"
-  echo "    Requested tools: $(echo "$STEP" | jq -r '(.requestedToolNames // []) | join(", ") | if . == "" then "none" else . end')"
-  echo "    Invoked tool: $(echo "$STEP" | jq -r '(.responseToolNames // []) | join(", ") | if . == "" then "none" else . end')"
-  echo "    Cryptographic Trace Hash (traceSha256): $(echo "$STEP" | jq -r '.traceSha256 // "none"')"
+  echo "    Status: $(echo "$STEP" | jq -r '.status') ($(echo "$STEP" | jq -r '.input_tokens') in / $(echo "$STEP" | jq -r '.output_tokens') out, cost: \$$(echo "$STEP" | jq -r '.cost_usd'))"
+  echo "    Requested tools: $(echo "$STEP" | jq -r '(.requested_tool_names // []) | join(", ") | if . == "" then "none" else . end')"
+  echo "    Invoked tool: $(echo "$STEP" | jq -r '(.response_tool_names // []) | join(", ") | if . == "" then "none" else . end')"
+  echo "    Cryptographic Trace Hash (trace_sha256): $(echo "$STEP" | jq -r '.trace_sha256 // "none"')"
 done
 
 echo ""
-echo "Querying session trace records (llmAgentSessionRecords)..."
-RECORDS_RESULT=$(graphql 'query GetAgentSessionRecords($sessionId: String!, $window: String) {
-  llmAgentSessionRecords(sessionId: $sessionId, window: $window) {
-    records {
-      requestId
-      verification
-    }
-  }
-}' "$SESSION_VARS")
-RECORDS=$(echo "$RECORDS_RESULT" | jq -c '.llmAgentSessionRecords.records // []')
+echo "Querying session trace records (GET /v1/llm/sessions/records)..."
+RECORDS_RESULT=$(list_session_records "$(jq -n --arg session_id "$AGENT_SESSION_ID" '{session_id: $session_id}')")
+RECORDS=$(echo "$RECORDS_RESULT" | jq -c '.items // []')
 RECORD_COUNT=$(echo "$RECORDS" | jq 'length')
 echo "  Trace records available: $RECORD_COUNT"
-echo "$RECORDS" | jq -r '.[] | "    Request: \(.requestId) -> verification: \(.verification)"'
+echo "$RECORDS" | jq -r '.[] | "    Request: \(.request_id) -> verification: \(.verification)"'
 
 echo ""
 echo "Evidence: Sessions tab ($CONSOLE_SESSIONS?session=$AGENT_SESSION_ID) - inspect multi-turn tool call pairings, input parameters, and cryptographic verification."

@@ -28,9 +28,9 @@ async function main() {
     policy: {
       name: 'multi-model-policy',
       mode: 'enforce',
-      budgetMode: 'hard',
-      allowedProviders: ['vertex_ai'],
-      allowedModels: [MODELS.default, MODELS.premium], // both models are allowlisted under one policy
+      budget_mode: 'hard',
+      allowed_providers: ['vertex_ai'],
+      allowed_models: [MODELS.default, MODELS.premium], // both models are allowlisted under one policy
     },
   });
 
@@ -65,7 +65,6 @@ async function main() {
 
   console.log(`Compare aggregate cost and latency per model in the Cloptima Console:`);
   console.log(`  - Explorer: ${CONSOLE.spend}`);
-  console.log(`  - Recommendations: ${CONSOLE.recommendations}`);
 }
 
 main().catch((err) => {

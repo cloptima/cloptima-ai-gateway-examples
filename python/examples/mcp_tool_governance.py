@@ -5,7 +5,8 @@ and how the application handles tool servers and tools that policy does not allo
 
 Pattern:
 1. Governance setup: register tool servers and bind a policy that allows one of them.
-   A newly registered server is created `disabled` until it is reviewed.
+   On plans with approval workflows, a newly registered server is created `disabled` with a
+   `pending_approval_id` until it is reviewed. On other plans it is created `active`.
 2. Case 1: Agent calls an allowed tool on an approved server -> admitted.
 3. Case 2: Agent references an unregistered server -> blocked with HTTP 403.
 4. Case 3: Agent requests a tool the server does not allow -> blocked with HTTP 403.
@@ -23,9 +24,8 @@ from lib.client import openai_client
 from lib.config import BASE_URL, CONSOLE, USER_AGENT
 from lib.models import MODELS
 
-CREATE_TOOL_SERVER = """mutation CreateToolServer($input: LLMGatewayToolServerInput!) {
-  createLLMGatewayToolServer(input: $input) { id name status }
-}"""
+def create_tool_server(input_data: dict) -> dict:
+    return gateway_admin.admin_api("POST", "/v1/llm/tool-servers", body=input_data)
 
 
 def call_with_mcp_server(virtual_key: str, server_label: str, allowed_tools: list) -> dict:
@@ -56,6 +56,7 @@ def call_with_mcp_server(virtual_key: str, server_label: str, allowed_tools: lis
         except Exception:
             body = {}
         return {"blocked": True, "violations": body.get("violations", [])}
+    response.raise_for_status()
     return {"blocked": False, "violations": []}
 
 
@@ -64,46 +65,30 @@ def main() -> None:
     suffix = config.run_suffix()
 
     # --- Governance setup (admin) -------------------------------------------------------------
-    print("Registering a new tool server (awaiting security review)...")
-    res = gateway_admin.graphql(
-        CREATE_TOOL_SERVER,
-        {
-            "input": {
-                "name": f"mcp-pending-{suffix}",
-                "serverType": "mcp",
-                "serverUrl": "https://mcp.example.com/v1",
-                "status": "active",
-                "allowedToolNames": ["search", "lookup"],
-            }
-        },
-    )
-    pending_server = res["createLLMGatewayToolServer"]
-    print(f'  {pending_server["name"]}: status "{pending_server["status"]}" until an admin approves the registration.')
+    print("Registering a new tool server...")
+    pending_server = create_tool_server({
+        "name": f"mcp-pending-{suffix}",
+        "server_type": "mcp",
+        "server_url": "https://mcp.example.com/v1",
+        "status": "active",
+        "allowed_tool_names": ["search", "lookup"],
+    })
+    if pending_server.get("pending_approval_id"):
+        print(f'  {pending_server["name"]}: status "{pending_server["status"]}" until an admin approves the registration.')
+        print(f"  Review queued as approval {pending_server['pending_approval_id']} ({CONSOLE['audit']}).")
+    else:
+        print(f'  {pending_server["name"]}: status "{pending_server["status"]}" (this plan has no registration review step).')
 
-    pending = gateway_admin.list_llm_gateway_approvals(status="pending", limit=50)
-    registration = next(
-        (a for a in pending if a.get("approvalType") == "mcp_tool_server_registration" and a.get("targetId") == pending_server["id"]),
-        None,
-    )
-    if registration:
-        print(f"  Review queued as approval {registration['id']} ({CONSOLE['audit']}).")
-
-    print("\nRegistering a reviewed tool server with applyImmediately: true...")
+    print("\nRegistering a reviewed tool server with apply_immediately: true...")
     server_label = f"mcp-github-{suffix}"
-    res2 = gateway_admin.graphql(
-        CREATE_TOOL_SERVER,
-        {
-            "input": {
-                "name": server_label,
-                "serverType": "mcp",
-                "serverUrl": "https://mcp.github.example/v1",
-                "status": "active",
-                "allowedToolNames": ["create_issue", "list_issues"],
-                "applyImmediately": True,
-            }
-        },
-    )
-    active_server = res2["createLLMGatewayToolServer"]
+    active_server = create_tool_server({
+        "name": server_label,
+        "server_type": "mcp",
+        "server_url": "https://mcp.github.example/v1",
+        "status": "active",
+        "allowed_tool_names": ["create_issue", "list_issues"],
+        "apply_immediately": True,
+    })
     print(f'  {active_server["name"]}: status "{active_server["status"]}"')
 
     setup = provision_app(
@@ -111,10 +96,10 @@ def main() -> None:
         policy={
             "name": "mcp-agent-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
-            "allowedToolServers": [server_label],  # the agent may only use this tool server
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
+            "allowed_tool_servers": [server_label],  # the agent may only use this tool server
         },
     )
     virtual_key = setup["virtual_key"]

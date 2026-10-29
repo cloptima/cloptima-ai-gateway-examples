@@ -43,7 +43,7 @@ Every script has two parts:
 1. **Governance setup.** The policy (and any guardrail profile, tool server, or price sheet) the scenario runs under, written inline with its real configuration. Platform teams normally create these once in the Console, Terraform, or CI.
 2. **Application code.** What your service does: `curl` calls, handling blocks, and reading results. This is the part to copy into your own scripts.
 
-`lib.sh` holds the small set of helpers the setup uses (`get_access`, `provision_app`, `graphql`, and the `create_*` mutations) and `describe_block`, which prints the message, reason, and violations from a blocked response.
+`lib.sh` holds the small set of helpers the setup uses (`get_access`, `provision_app`, `admin_api` for the Cloptima REST API, and the `create_*` helpers) and `describe_block`, which prints the message, reason, and violations from a blocked response.
 
 ## Run an example
 
@@ -59,7 +59,7 @@ Set one credential in `.env`:
 - `CLOPTIMA_AI_ADMIN_KEY`: the script runs its governance setup for you, then runs the application code. Works with every example.
 - `CLOPTIMA_VIRTUAL_KEY`: the script skips setup and runs only the application code with your key. Use it with the examples marked **Virtual key** below. The key must be bound to a policy like the one in the script's governance setup, or the scenario will not trigger.
 
-Some examples need more: `byok` and `contract-pricing` need `PROVIDER_API_KEY` (or `CLOPTIMA_PROVIDER_CREDENTIAL_ID`), and the managed guardrail examples need available managed credits.
+Some examples need more: `byok` and `contract-pricing` need `PROVIDER_API_KEY` (or `CLOPTIMA_PROVIDER_CREDENTIAL_ID`). `pii-guardrail` and `content-safety-guardrail` need the `llm_guardrail_enterprise` entitlement. Every other model call runs on Cloptima-managed credentials and needs available AI credits; Cloptima-managed content-safety scans are billed to the same credits.
 
 ## Handling gateway responses
 
@@ -85,7 +85,8 @@ Check the status with `curl -w '%{http_code}'` and read the body with `jq`.
 | `./quickstart-openai.sh` | Virtual key | Chat completion and streaming in the OpenAI-compatible shape. |
 | `./quickstart-anthropic.sh` | Virtual key | Messages and streaming in the Anthropic-compatible shape. |
 | `./multi-model.sh` | Virtual key | Compare latency and token cost across models under one policy. |
-| `./pii-guardrail.sh` | Virtual key | Support bot blocks an SSN before it reaches the model and returns a friendly fallback. |
+| `./pii-guardrail.sh` | Virtual key | Support bot: email addresses and phone numbers are redacted before the model provider sees them and restored in the response; a message with an employee ID is blocked and the app returns a friendly fallback. |
+| `./content-safety-guardrail.sh` | Virtual key | Cloptima-managed content safety answers a normal request and blocks a prompt-injection attempt. |
 | `./provider-deny.sh` | Virtual key | Compliance policy blocks a non-approved provider; the app falls back to an approved model. |
 | `./rate-limit.sh` | Virtual key | Batch worker retries with exponential backoff on HTTP 429. |
 | `./token-limit.sh` | Virtual key | Summarization service handles an output-token cap. |
@@ -93,19 +94,15 @@ Check the status with `curl -w '%{http_code}'` and read the body with `jq`.
 | `./agentic-runaway.sh` | Virtual key | Agent loop and repeated tool retries are stopped by the policy's loop and retry caps. |
 | `./exact-semantic-cache.sh` | Virtual key | Latency and token savings from exact and semantic cache hits. |
 | `./conversation-prompt-caching.sh` | Virtual key | Provider prompt caching on a growing multi-turn conversation (OpenAI and Anthropic). |
-| `./adaptive-routing.sh` | Virtual key | Adaptive routing in observe mode across cheap, balanced, and strong model tiers. |
-| `./guardrail-cost-governance.sh` | Virtual key | Per-request cost cap on a managed guardrail scan. |
 | `./metadata-deny.sh` | Virtual key | Requests without team and app attribution are refused; attributed requests are admitted. With `CLOPTIMA_VIRTUAL_KEY`, use an unscoped key (no team or app baked in) bound to a policy that requires attribution. |
-| `./guardrail-detector-categories.sh` | Virtual key | One managed guardrail scan per run: Google Model Armor (default), Azure AI Content Safety, or Amazon Bedrock Guardrails. Choose with `GUARDRAIL_PROVIDER=google-model-armor\|azure-content-safety\|bedrock-guardrails`. |
 | `./byok.sh` | Virtual key + `CLOPTIMA_PROVIDER_CREDENTIAL_ID`, or admin key + `PROVIDER_API_KEY` | Route calls through your own provider credential. |
 | `./semantic-cache-enforce.sh` | Admin key | Enforce-mode semantic cache, including the class approval it needs. |
 | `./unit-economics-roi.sh` | Admin key | Cost-center and profit-center ROI from business-outcome headers and unit metrics. |
 | `./contract-pricing.sh` | Admin key + `PROVIDER_API_KEY` or `CLOPTIMA_PROVIDER_CREDENTIAL_ID` | Negotiated rate sheet versus retail cost on your own credentials. |
 | `./approval-workflow.sh` | Admin key | Budget-change request waits in the governance queue; a pre-authorized change applies immediately. |
-| `./prompt-release-workflow.sh` | Admin key | Prompt evaluation against a golden dataset and a quality-gated release. |
 | `./mcp-tool-governance.sh` | Admin key | Tool servers start disabled until reviewed; unregistered servers and disallowed tools are blocked. |
-| `./session-trace-audit.sh` | Admin key | Agent session with tool I/O capture and per-step integrity hashes (`traceSha256`). |
-| `./cleanup.sh` | Admin key | Delete the policies, keys, profiles, and datasets the examples created. |
+| `./session-trace-audit.sh` | Admin key | Agent session with tool I/O capture and per-step integrity hashes (`trace_sha256`). |
+| `./cleanup.sh` | Admin key | Delete the policies, bindings, keys, profiles, tool servers, and other gateway resources in the account. Use it only in a sandbox account. |
 
 ## Cleanup
 

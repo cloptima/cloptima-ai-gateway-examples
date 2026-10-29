@@ -17,17 +17,17 @@ from lib.client import openai_client
 from lib.models import MODELS
 
 ROUTE = "/v1/ai/chat/completions"
-MODEL_FAMILY = MODELS["default"]
+# A class approval names the model as the gateway records it: the model id
+# without its provider prefix (gemini-3.5-flash-lite).
+MODEL_FAMILY = MODELS["default"].split("/")[-1]
 
 
 def ensure_class_approval(app_id: str) -> dict:
-    data = gateway_admin.graphql(
-        """mutation CreateClassApproval($input: LLMSemanticCacheClassApprovalInput!) {
-          createLLMSemanticCacheClassApproval(input: $input) { id appId route modelFamily createdAt }
-        }""",
-        {"input": {"appId": app_id, "route": ROUTE, "modelFamily": MODEL_FAMILY, "notes": "semantic-cache-enforce example"}},
+    return gateway_admin.admin_api(
+        "POST",
+        "/v1/llm/semantic-cache/class-approvals",
+        body={"app_id": app_id, "route": ROUTE, "model_family": MODEL_FAMILY, "notes": "semantic-cache-enforce example"},
     )
-    return data["createLLMSemanticCacheClassApproval"]
 
 
 def query_with_latency(client: Any, prompt: str, label: str) -> Dict[str, Any]:
@@ -58,17 +58,19 @@ def main() -> None:
         policy={
             "name": "semantic-cache-enforce-policy",
             "mode": "enforce",
-            "budgetMode": "hard",
-            "allowedProviders": ["vertex_ai"],
-            "allowedModels": [MODELS["default"]],
-            "promptRetentionMode": "full",
-            "exactCacheEnabled": True,
-            "exactCacheMode": "enforce",
-            "semanticCacheEnabled": True,
-            "semanticCacheMode": "enforce",
-            "applyImmediately": True,
+            "budget_mode": "hard",
+            "allowed_providers": ["vertex_ai"],
+            "allowed_models": [MODELS["default"]],
+            "exact_cache_enabled": True,
+            "exact_cache_mode": "enforce",
+            "semantic_cache_enabled": True,
+            "semantic_cache_mode": "enforce",
+            "semantic_cache_review_required": True,
+            "apply_immediately": True,
         },
     )
+    # With semantic_cache_review_required, enforce mode serves a semantic hit only for an approved
+    # (app_id, route, model_family) class. Without one, would-be hits are recorded but not served.
     ensure_class_approval(setup["app_id"])
 
     # Application code: the official SDK, pointed at the gateway with a virtual key.

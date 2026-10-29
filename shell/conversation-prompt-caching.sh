@@ -112,8 +112,8 @@ echo ""
 # Platform admins normally create it once in the Console, Terraform, or CI. Skipped when
 # CLOPTIMA_VIRTUAL_KEY points at a key whose policy already matches.
 get_access "coding-assistant-demo" "$(jq -n --arg model "$MODEL_DEFAULT" '{
-  name: "coding-assistant-policy", mode: "enforce", budgetMode: "hard",
-  allowedProviders: ["vertex_ai"], allowedModels: [$model]}')"
+  name: "coding-assistant-policy", mode: "enforce", budget_mode: "hard",
+  allowed_providers: ["vertex_ai"], allowed_models: [$model]}')"
 
 # Application code: each turn resends the full message history plus one new short question.
 echo "Sending a growing conversation - each turn resends the full history (system context + every prior exchange) plus one new short question..."
